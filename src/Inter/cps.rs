@@ -23,6 +23,7 @@ pub enum Type {
 pub struct ArrayType {
     pub lower_bound: Box<Expr>,
     pub upper_bound: Box<Expr>,
+    pub bounds_2d: Option<(Box<Expr>, Box<Expr>)>,
     pub base_type: Box<Type>,
 }
 
@@ -34,7 +35,7 @@ pub enum Value {
     String(String),
     Boolean(bool),
     Char(char),
-    Array { array: Vec<Value>, lower_bound: usize } ,
+    Array { array: Vec<Value>, lower_bound: usize, bounds_2d: Option<(usize, usize)> }, 
     Identifier(String),
     Function(Function),
     // Record(HashMap<String, Value>),
@@ -134,72 +135,157 @@ impl Environment {
         }
     }
 
-    pub fn set_array_element(&mut self, name: &str, index: usize, value: Value) -> Result<(), CPSError> {
+
+    pub fn set_array_element(&mut self, name: &str, index: usize, col: Option<usize>, value: Value) -> Result<(), CPSError> {
         if let Some(current_value) = self.bindings.get_mut(name) {
             match current_value {
-                Value::Array { array, lower_bound } => {
+                Value::Array { array, lower_bound, bounds_2d } => {
                     if index < *lower_bound {
-                        let current_lb = *lower_bound;
                         return Err(CPSError {
                             error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!(
-                                "Array index {} is below lower bound {} for '{}'",
-                                index, lower_bound, name
-                            ),
-                            hint: Some(format!("Valid indices range from {} to {}", lower_bound, current_lb + array.len() - 1)),
-                            line: 0,
-                            column: 0,
-                            source: None,
+                            message: format!("Array index {} is below lower bound {} for '{}'", index, lower_bound, name),
+                            hint: Some(format!("Valid indices start from {}", lower_bound)),
+                            line: 0, column: 0, source: None,
                         });
                     }
 
-                    let array_index = index - *lower_bound;
+                    let flat_index = if let Some((col_lb, col_ub)) = bounds_2d {
+                        let col_idx = col.ok_or_else(|| CPSError {
+                            error_type: crate::errortype::ErrorType::Runtime,
+                            message: format!("Missing column index for 2D array '{}'", name),
+                            hint: Some("2D arrays require both row and column indices".to_string()),
+                            line: 0, column: 0, source: None,
+                        })?;
 
-                    if array_index >= array.len() {
-                        let current_lb = *lower_bound;
+                        let col_count = *col_ub - *col_lb + 1;
+                        let row_offset = index - *lower_bound;
+                        let col_offset = col_idx.checked_sub(*col_lb).ok_or_else(|| CPSError {
+                            error_type: crate::errortype::ErrorType::Runtime,
+                            message: format!("Column index {} is below lower bound {} for '{}'", col_idx, col_lb, name),
+                            hint: Some(format!("Valid column indices start from {}", col_lb)),
+                            line: 0, column: 0, source: None,
+                        })?;
+
+                        if col_offset >= col_count {
+                            return Err(CPSError {
+                                error_type: crate::errortype::ErrorType::Runtime,
+                                message: format!("Column index {} is out of bounds for '{}'", col_idx, name),
+                                hint: Some(format!("Valid column indices range from {} to {}", col_lb, col_ub)),
+                                line: 0, column: 0, source: None,
+                            });
+                        }
+
+                        row_offset * col_count + col_offset
+                    } else {
+                        index - *lower_bound
+                    };
+
+                    if flat_index >= array.len() {
                         return Err(CPSError {
                             error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!(
-                                "Array index {} is out of bounds for '{}' (length: {})",
-                                index, name, array.len()
-                            ),
-                            hint: Some(format!("Valid indices range from {} to {}", lower_bound, current_lb + array.len() - 1)),
-                            line: 0,
-                            column: 0,
-                            source: None,
+                            message: format!("Array index out of bounds for '{}'", name),
+                            hint: None,
+                            line: 0, column: 0, source: None,
                         });
                     }
 
-                    array[array_index] = value;
+                    array[flat_index] = value;
                     return Ok(());
                 }
-                _ => {
-                    return Err(CPSError {
-                        error_type: crate::errortype::ErrorType::Runtime,
-                        message: format!("Variable '{}' is not an array", name),
-                        hint: Some("Array indexing can only be used on array variables".to_string()),
-                        line: 0,
-                        column: 0,
-                        source: None,
-                    });
-                }
+                _ => return Err(CPSError {
+                    error_type: crate::errortype::ErrorType::Runtime,
+                    message: format!("Variable '{}' is not an array", name),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
             }
         }
 
-        // If not found in current scope, check parent
         match &self.parent {
-            Some(parent_rc) => parent_rc.borrow_mut().set_array_element(name, index, value),
+            Some(parent_rc) => parent_rc.borrow_mut().set_array_element(name, index, col, value),
             None => Err(CPSError {
                 error_type: crate::errortype::ErrorType::Runtime,
                 message: format!("Variable '{}' not found", name),
-                hint: Some("Ensure the variable is declared before use".to_string()),
-                line: 0,
-                column: 0,
-                source: None,
+                hint: None,
+                line: 0, column: 0, source: None,
             }),
         }
     }
 
+    pub fn get_array_element(&self, name: &str, index: usize, col: Option<usize>) -> Result<Value, CPSError> {
+        if let Some(current_value) = self.bindings.get(name) {
+            match current_value {
+                Value::Array { array, lower_bound, bounds_2d } => {
+                    if index < *lower_bound {
+                        return Err(CPSError {
+                            error_type: crate::errortype::ErrorType::Runtime,
+                            message: format!("Array index {} is below lower bound {} for '{}'", index, lower_bound, name),
+                            hint: Some(format!("Valid indices start from {}", lower_bound)),
+                            line: 0, column: 0, source: None,
+                        });
+                    }
+
+                    let flat_index = if let Some((col_lb, col_ub)) = bounds_2d {
+                        let col_idx = col.ok_or_else(|| CPSError {
+                            error_type: crate::errortype::ErrorType::Runtime,
+                            message: format!("Missing column index for 2D array '{}'", name),
+                            hint: Some("2D arrays require both row and column indices".to_string()),
+                            line: 0, column: 0, source: None,
+                        })?;
+
+                        let col_count = *col_ub - *col_lb + 1;
+                        let row_offset = index - *lower_bound;
+                        let col_offset = col_idx.checked_sub(*col_lb).ok_or_else(|| CPSError {
+                            error_type: crate::errortype::ErrorType::Runtime,
+                            message: format!("Column index {} is below lower bound {} for '{}'", col_idx, col_lb, name),
+                            hint: Some(format!("Valid column indices start from {}", col_lb)),
+                            line: 0, column: 0, source: None,
+                        })?;
+
+                        if col_offset >= col_count {
+                            return Err(CPSError {
+                                error_type: crate::errortype::ErrorType::Runtime,
+                                message: format!("Column index {} is out of bounds for '{}'", col_idx, name),
+                                hint: Some(format!("Valid column indices range from {} to {}", col_lb, col_ub)),
+                                line: 0, column: 0, source: None,
+                            });
+                        }
+
+                        row_offset * col_count + col_offset
+                    } else {
+                        index - *lower_bound
+                    };
+
+                    if flat_index >= array.len() {
+                        return Err(CPSError {
+                            error_type: crate::errortype::ErrorType::Runtime,
+                            message: format!("Array index out of bounds for '{}'", name),
+                            hint: None,
+                            line: 0, column: 0, source: None,
+                        });
+                    }
+
+                    Ok(array[flat_index].clone())
+                }
+                _ => Err(CPSError {
+                    error_type: crate::errortype::ErrorType::Runtime,
+                    message: format!("Variable '{}' is not an array", name),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            }
+        } else {
+            match &self.parent {
+                Some(parent_rc) => parent_rc.borrow().get_array_element(name, index, col),
+                None => Err(CPSError {
+                    error_type: crate::errortype::ErrorType::Runtime,
+                    message: format!("Variable '{}' not found", name),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            }
+        }
+    }
 
     pub fn get_type(&mut self, name: &str) -> Result<Type, CPSError> {
         if let Some(value) = self.bindings.get(name) {
@@ -209,53 +295,58 @@ impl Environment {
                 Value::String(_) => Type::String,
                 Value::Boolean(_) => Type::Boolean,
                 Value::Char(_) => Type::Char,
-                Value::Array { array, lower_bound } => {
-                    Type::Array(ArrayType { 
-                    lower_bound: Box::new(Expr::Literal(Value::Integer(*lower_bound as i64))),
-                    upper_bound: Box::new(Expr::Literal(Value::Integer((array.len() + *lower_bound - 1) as i64))),
-                    base_type: Box::new(if let Some(first_elem) = array.first() {
+                Value::Array { array, lower_bound, bounds_2d } => {
+                    let (upper_bound, bounds_2d_type) = if let Some((col_lb, col_ub)) = bounds_2d {
+                        let col_count = col_ub - col_lb + 1;
+                        let row_count = array.len() / col_count;
+                        let row_ub = *lower_bound + row_count - 1;
+                        (
+                            row_ub as i64,
+                            Some((
+                                    Box::new(Expr::Literal(Value::Integer(*col_lb as i64))),
+                                    Box::new(Expr::Literal(Value::Integer(*col_ub as i64))),
+                            ))
+                        )
+                    } else {
+                        ((array.len() + *lower_bound - 1) as i64, None)
+                    };
+
+                    let base_type = if let Some(first_elem) = array.first() {
                         match first_elem {
                             Value::Integer(_) => Type::Integer,
                             Value::Real(_) => Type::Real,
                             Value::String(_) => Type::String,
                             Value::Boolean(_) => Type::Boolean,
                             Value::Char(_) => Type::Char,
-                            _ => {
+                            Value::Array { .. } => {
                                 return Err(CPSError {
                                     error_type: crate::errortype::ErrorType::Runtime,
-                                    message: format!("Unsupported array element type for variable '{}'", name),
-                                    hint: Some("Check the array's element types.".to_string()),
-                                    line: 0,
-                                    column: 0,
-                                    source: None,
+                                    message: format!("Nested arrays are not supported for '{}'", name),
+                                    hint: None,
+                                    line: 0, column: 0, source: None,
                                 });
                             }
+                            Value::Identifier(_) => Type::String,
+                            Value::Function(_) => Type::Function,
                         }
                     } else {
                         return Err(CPSError {
                             error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!("Cannot determine base type of empty array for variable '{}'", name),
-                            hint: Some("Ensure the array is not empty.".to_string()),
-                            line: 0,
-                            column: 0,
-                            source: None,
+                            message: format!("Cannot determine base type of empty array '{}'", name),
+                            hint: Some("Consider initializing the array with a default value.".to_string()),
+                            line: 0, column: 0, source: None,
                         });
-                    }
+                    };
 
-                    )
-                })},
-                Value::Identifier(_) => Type::String, // Placeholder
+                    Type::Array(ArrayType {
+                        lower_bound: Box::new(Expr::Literal(Value::Integer(*lower_bound as i64))),
+                        upper_bound: Box::new(Expr::Literal(Value::Integer(upper_bound))),
+                        bounds_2d: bounds_2d_type,
+                        base_type: Box::new(base_type),
+                    })
+                },
+                Value::Identifier(_) => Type::String,
                 Value::Function(_) => Type::Function,
-                // _ => {
-                //     return Err(CPSError {
-                //         error_type: crate::errortype::ErrorType::Runtime,
-                //         message: format!("Cannot determine type of variable '{}'", name),
-                //         hint: Some("Check the variable's value.".to_string()),
-                //         line: 0,
-                //         column: 0,
-                //         source: None,
-                //     });
-                // }
             };
             return Ok(var_type);
         }
@@ -266,12 +357,12 @@ impl Environment {
                 error_type: crate::errortype::ErrorType::Runtime,
                 message: format!("Undefined variable '{}'", name),
                 hint: Some("Check if the variable is declared before use.".to_string()),
-                line: 0,
-                column: 0,
-                source: None,
+                line: 0, column: 0, source: None,
             }),
         }
     }
+
+
 
     pub fn define(&mut self, name: String, value: Value) {
         self.bindings.insert(name, value);
