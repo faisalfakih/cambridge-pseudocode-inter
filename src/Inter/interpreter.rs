@@ -113,7 +113,7 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_assignment_stmt(&mut self, identifier: &String, value: &Ast, array_index: &Option<Expr>) -> Result<(), CPSError> {
+    fn evaluate_assignment_stmt(&mut self, identifier: &String, value: &Ast, array_index: &Option<(Box<Expr>, Option<Box<Expr>>)>) -> Result<(), CPSError> {
         let value_expression = match value {
             Ast::Expression(expr) => expr,
             Ast::Identifier(name) => {
@@ -199,8 +199,14 @@ impl Interpreter {
         };
 
         match array_index {
-            Some(idx) => {
-                let index_value = self.evaluate_expr(idx)?;
+            Some(indices) => {
+                let idx = &indices.0;
+                let col = &indices.1;
+                let index_value = self.evaluate_expr(&*idx)?;
+                let column_value = match col {
+                    Some(col_expr) => Some(self.evaluate_expr(&*col_expr)?),
+                    None => None,
+                };
 
                 let index_int = match index_value {
                     Value::Integer(n) => n as isize,
@@ -229,10 +235,53 @@ impl Interpreter {
                     }
                 };
 
+                let column_int = match column_value {
+                    Some(Value::Integer(n)) => Some(n as isize),
+                    Some(Value::Real(r)) => {
+                        if r.fract() != 0.0 {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Array column index must be an integer, got real number: {}", r),
+                                hint: None,
+                                line: 0,
+                                column: 0,
+                                source: None,
+                            });
+                        }
+                        Some(r as isize)
+                    }
+                    Some(_) => {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Array column index must be an integer, got: {:?}", column_value),
+                            hint: None,
+                            line: 0,
+                            column: 0,
+                            source: None,
+                        });
+                    }
+                    None => None,
+                };
+
+                let column_usize = match column_int {
+                    Some(c) if c >= 0 => Some(c as usize),
+                    Some(_) => {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Array column index cannot be negative, got: {}", column_int.unwrap()),
+                            hint: None,
+                            line: 0,
+                            column: 0,
+                            source: None,
+                        });
+                    }
+                    None => None,
+                };
+
                 // now set the array element at index
                 self.current_env
                     .borrow_mut()
-                    .set_array_element(identifier, index_int as usize, converted_val)
+                    .set_array_element(identifier, index_int as usize, column_usize, converted_val)
                     .map_err(|e| CPSError {
                         error_type: ErrorType::Runtime,
                         message: format!("Failed to assign value to array element '{}[{}]': {}", identifier, index_int, e.message),
@@ -267,7 +316,7 @@ impl Interpreter {
             Value::String(_) => Ok(Type::String),
             Value::Boolean(_) => Ok(Type::Boolean),
             Value::Char(_) => Ok(Type::Char),
-            Value::Array { array, lower_bound } => {
+            Value::Array { array, lower_bound, bounds_2d } => {
                 let first_elem = array.first().ok_or_else(|| CPSError {
                     error_type: crate::errortype::ErrorType::Runtime,
                     message: format!("Cannot determine base type of empty array for variable '{}'", identifier),
@@ -294,11 +343,26 @@ impl Interpreter {
                         });
                     }
                 };
+                let bounds = match bounds_2d {
+                    Some((lower2, upper2)) => Some((
+                        Box::new(Expr::Literal(Value::Integer(*lower2 as i64))),
+                        Box::new(Expr::Literal(Value::Integer(*upper2 as i64)))
+                    )),
+                    None => None,
+                };
 
                 Ok(Type::Array(ArrayType {
                     lower_bound: Box::new(Expr::Literal(Value::Integer(*lower_bound as i64))),
-                    upper_bound: Box::new(Expr::Literal(Value::Integer((array.len() + *lower_bound - 1) as i64))),
+                    let upper_bound_val = if let Some((col_lb, col_ub)) = bounds_2d {
+                        let col_count = col_ub - col_lb + 1;
+                        let row_count = array.len() / col_count;
+                        *lower_bound + row_count - 1
+                    } else {
+                        array.len() + *lower_bound - 1
+                    };
+                    upper_bound: Box::new(Expr::Literal(Value::Integer(upper_bound_val as i64))),
                     base_type: Box::new(base_type),
+                    bounds_2d: bounds,
                 }))
             }
             Value::Identifier(_) => Err(CPSError {
@@ -494,7 +558,7 @@ impl Interpreter {
                     }
                 }
             } 
-            Expr::ArrayAccess { name, index } => {
+            Expr::ArrayAccess { name, index, col } => {
                 let index_value = self.evaluate_expr(&index)?;
 
                 let index_int = match index_value {
@@ -523,10 +587,58 @@ impl Interpreter {
                         });
                     }
                 };
+                let col_value = match col {
+                    Some(col_expr) => Some(self.evaluate_expr(&col_expr)?),
+                    None => None,
+                };
+
+                 let col_int = match col_value {
+                    Some(Value::Integer(n)) => Some(n as isize),
+                    Some(Value::Real(r)) => {
+                        if r.fract() != 0.0 {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Array column index must be an integer, got real number: {}", r),
+                                hint: None,
+                                line: 0,
+                                column: 0,
+                                source: None,
+                            });
+                        }
+                        Some(r as isize)
+                    }
+                    Some(_) => {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Array column index must be an integer, got: {:?}", col_value),
+                            hint: None,
+                            line: 0,
+                            column: 0,
+                            source: None,
+                        });
+                    }
+                    None => None,
+                };
+
+                let col_usize = match col_int {
+                    Some(c) if c >= 0 => Some(c as usize),
+                    Some(_) => {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Array column index cannot be negative, got: {}", col_int.unwrap()),
+                            hint: None,
+                            line: 0,
+                            column: 0,
+                            source: None,
+                        });
+                    }
+                    None => None,
+                };
+
 
                 self.current_env
                     .borrow_mut()
-                    .set_array_element(&name, index_int as usize, Value::String(input))
+                    .set_array_element(&name, index_int as usize, col_usize, Value::String(input))
                     .map_err(|e| CPSError {
                         error_type: ErrorType::Runtime,
                         message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
@@ -731,45 +843,69 @@ impl Interpreter {
                 let lower = match self.evaluate_expr(&arr.lower_bound)? {
                     Value::Integer(n) => n,
                     Value::Real(r) => r as i64,
-                    _ => {
-                        return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: "Array lower bound must be an integer".to_string(),
-                            hint: None,
-                            line: 0,
-                            column: 0,
-                            source: None,
-                        });
-                    }
+                    _ => return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: "Array lower bound must be an integer".to_string(),
+                        hint: None, line: 0, column: 0, source: None,
+                    }),
                 };
 
                 let upper = match self.evaluate_expr(&arr.upper_bound)? {
                     Value::Integer(n) => n,
                     Value::Real(r) => r as i64,
-                    _ => {
-                        return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: "Array upper bound must be an integer".to_string(),
-                            hint: None,
-                            line: 0,
-                            column: 0,
-                            source: None,
-                        });
-                    }
+                    _ => return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: "Array upper bound must be an integer".to_string(),
+                        hint: None, line: 0, column: 0, source: None,
+                    }),
                 };
 
                 if upper < lower {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
                         message: format!("Array upper bound {} cannot be less than lower bound {}", upper, lower),
-                        hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
+                        hint: None, line: 0, column: 0, source: None,
                     });
                 }
 
-                let length = (upper - lower + 1) as usize;
+                let row_count = (upper - lower + 1) as usize;
+
+                let bounds_2d = if let Some((col_lb_expr, col_ub_expr)) = &arr.bounds_2d {
+                    let col_lb = match self.evaluate_expr(col_lb_expr)? {
+                        Value::Integer(n) => n,
+                        Value::Real(r) => r as i64,
+                        _ => return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: "Array column lower bound must be an integer".to_string(),
+                            hint: None, line: 0, column: 0, source: None,
+                        }),
+                    };
+                    let col_ub = match self.evaluate_expr(col_ub_expr)? {
+                        Value::Integer(n) => n,
+                        Value::Real(r) => r as i64,
+                        _ => return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: "Array column upper bound must be an integer".to_string(),
+                            hint: None, line: 0, column: 0, source: None,
+                        }),
+                    };
+                    if col_ub < col_lb {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Column upper bound {} cannot be less than lower bound {}", col_ub, col_lb),
+                            hint: None, line: 0, column: 0, source: None,
+                        });
+                    }
+                    Some((col_lb as usize, col_ub as usize))
+                } else {
+                    None
+                };
+
+                let total_length = if let Some((col_lb, col_ub)) = &bounds_2d {
+                    row_count * (col_ub - col_lb + 1)
+                } else {
+                    row_count
+                };
 
                 let default_value = match &*arr.base_type {
                     Type::Integer => Value::Integer(0),
@@ -777,43 +913,24 @@ impl Interpreter {
                     Type::String => Value::String(String::new()),
                     Type::Boolean => Value::Boolean(false),
                     Type::Char => Value::Char('\0'),
-                    Type::Array(inner_arr) => {
-                        return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: format!("Multidimensional arrays not supported yet: {:?}", inner_arr),
-                            hint: None,
-                            line: 0,
-                            column: 0,
-                            source: None,
-                        });
-                    }
-                    _ => {
-                        return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: format!("Unsupported array element type: {:?}", arr.base_type),
-                            hint: None,
-                            line: 0,
-                            column: 0,
-                            source: None,
-                        });
-                    }
+                    _ => return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Unsupported array element type: {:?}", arr.base_type),
+                        hint: None, line: 0, column: 0, source: None,
+                    }),
                 };
 
-
-
-                Value::Array { 
-                    array: vec![default_value; length], 
-                    lower_bound: lower as usize
+                Value::Array {
+                    array: vec![default_value; total_length],
+                    lower_bound: lower as usize,
+                    bounds_2d,
                 }
             },
             _ => {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
                     message: format!("Unsupported type for declaration: {:?}", type_),
-                    hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
+                    hint: None, line: 0, column: 0, source: None,
                 });
             }
         };
@@ -823,6 +940,8 @@ impl Interpreter {
             .define(identifier.to_owned(), inital_value);
         Ok(())
     }
+
+
 
     fn evaluate_procedure(&mut self, identifier: &String, parameters: &Vec<(String, Type)>, body: &BlockStmt) -> Result<(), CPSError> {
         // self.evaluate_declaration_stmt(identifier, &Type::Function)?;
@@ -1021,7 +1140,7 @@ impl Interpreter {
             Expr::Binary(expr) => self.evaluate_binary(expr),
             Expr::Literal(value) => self.evaluate_literal(value),
             Expr::Call { name, arguments } => self.evaluate_call(name, arguments),
-            Expr::ArrayAccess { name, index } => self.evaluate_array_access(name, index),
+            Expr::ArrayAccess { name, index, col } => self.evaluate_array_access(name, index, col),
             // _ => {
             //     return Err(CPSError {
             //         error_type: ErrorType::Runtime,
@@ -1035,95 +1154,66 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_array_access(&mut self, name: &String, index: &Box<Expr>) -> Result<Value, CPSError> { 
+    fn evaluate_array_access(&mut self, name: &String, index: &Box<Expr>, col: &Option<Box<Expr>>) -> Result<Value, CPSError> {
         let index_value = self.evaluate_expr(index)?;
-        let index_int = match index_value {
-            Value::Integer(n) => n as isize,
+        let index_int = self.value_to_index(&index_value, name)?;
+
+        let col_int = match col {
+            Some(col_expr) => {
+                let col_value = self.evaluate_expr(col_expr)?;
+                Some(self.value_to_index(&col_value, name)?)
+            }
+            None => None,
+        };
+
+        if index_int < 0 {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Array index cannot be negative for '{}': {}", name, index_int),
+                hint: None,
+                line: 0, column: 0, source: None,
+            });
+        }
+
+        if let Some(c) = col_int {
+            if c < 0 {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Column index cannot be negative for '{}': {}", name, c),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                });
+            }
+        }
+
+        self.current_env
+            .borrow()
+            .get_array_element(name, index_int as usize, col_int.map(|c| c as usize))
+    }
+
+    fn value_to_index(&self, value: &Value, name: &str) -> Result<isize, CPSError> {
+        match value {
+            Value::Integer(n) => Ok(*n as isize),
             Value::Real(r) => {
                 if r.fract() != 0.0 {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
-                        message: format!("Array index must be an integer, got real number: {}", r),
+                        message: format!("Array index must be an integer, got: {}", r),
                         hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
+                        line: 0, column: 0, source: None,
                     });
                 }
-                r as isize
-            }
-            _ => {
-                return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Array index must be an integer, got: {:?}", index_value),
-                    hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
-                });
-            }
-        };
-
-        let array_value = self.current_env
-            .borrow()
-            .get(name)
-            .ok_or_else(|| CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("Undefined array identifier: {}", name),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            })?;
-        match array_value {
-            Value::Array { array, lower_bound } => {
-                if index_int < 0 {
-                    return Err(CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Array index cannot be negative for '{}': {}", name, index_int),
-                        hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
-                    });
-                }
-
-
-                if index_int < lower_bound as isize {
-                    return Err(CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Array index lower than lower bound for '{}': {}", name, index_int),
-                        hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
-                    });
-                }
-
-                let adjusted_idx = index_int as usize - lower_bound;
-                if adjusted_idx >= array.len() {
-                    return Err(CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Array index out of bounds for '{}': {}", name, index_int),
-                        hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
-                    });
-                }
-
-                Ok(array[adjusted_idx].clone())
+                Ok(*r as isize)
             }
             _ => Err(CPSError {
                 error_type: ErrorType::Runtime,
-                message: format!("Identifier '{}' is not an array", name),
+                message: format!("Array index must be an integer for '{}', got: {:?}", name, value),
                 hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            })
+                line: 0, column: 0, source: None,
+            }),
         }
     }
+
 
     fn evaluate_binary(&mut self, binary: &BinaryExpr) -> Result<Value, CPSError> {
         let mut left = self.evaluate_ast(*binary.left.clone())?;
@@ -1589,9 +1679,9 @@ fn check_if_type_can_be_converted(value: &Value, target_type: &Type) -> bool {
         (Value::Boolean(_), Type::Boolean) => true,
         (Value::Char(_), Type::Char) => true,
         (Value::Integer(_), Type::Real) => true,
-        (Value::Array { array, lower_bound: _ }, Type::Array(arr_type)) => {
+        (Value::Array { array, lower_bound: _, bounds_2d: _ }, Type::Array(arr_type)) => {
             match arr_type {
-                ArrayType { lower_bound: _, upper_bound: _, base_type } => {
+                ArrayType { lower_bound: _, upper_bound: _, base_type , bounds_2d: _} => {
                     if array.is_empty() {
                         return true; // empty array can be converted
                     }

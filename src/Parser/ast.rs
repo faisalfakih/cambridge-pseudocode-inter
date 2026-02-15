@@ -41,7 +41,7 @@ pub enum Expr {
     Binary(BinaryExpr),
     Literal(Value),
     Call { name: String, arguments: Vec<Expr> },
-    ArrayAccess { name: String, index: Box<Expr> },
+    ArrayAccess { name: String, index: Box<Expr>, col: Option<Box<Expr>> }, // col for 2D arrays, the index exists for both 1D and 2D arrays but would be the row in a 2d array     
 }
 
 
@@ -54,7 +54,7 @@ pub enum Stmt {
     While { condition: Box<Expr>, body: BlockStmt },
     Repeat { body: BlockStmt, until: Box<Expr> },
     For { identifier: String, start: Box<Expr>, end: Box<Expr>, body: BlockStmt },
-    Assignment { identifier: String, array_index: Option<Expr>, value: Box<Ast> },
+    Assignment { identifier: String, array_index: Option<(Box<Expr>, Option<Box<Expr>>)>, value: Box<Ast> },
     Decleration { identifier: String, type_: Type},
     Input { identifier: Box<Expr> }, 
     Output { target: Expr },
@@ -145,8 +145,12 @@ impl Expr {
                 let args: Vec<String> = arguments.iter().map(|arg| arg.to_prefix()).collect();
                 format!("CALL {}({})", name, args.join(", "))
             },
-            Expr::ArrayAccess { name, index } => {
-                format!("{}[{}]", name, index.to_prefix())
+            Expr::ArrayAccess { name, index, col } => {
+                if let Some(col_expr) = col {
+                    format!("{}[{}, {}]", name, index.to_prefix(), col_expr.to_prefix())
+                } else {
+                    format!("{}[{}]", name, index.to_prefix())
+                }
             }
         }
     }
@@ -227,10 +231,14 @@ impl Stmt {
                 result
             }
             Stmt::Assignment { identifier, array_index, value } => {
-                if let Some(index) = array_index {
-                    format!("{}{}[{}] <- {}", indent_str, identifier, index.to_prefix(), value.to_prefix())
+                if let Some((index_expr, col_expr)) = array_index {
+                    if let Some(col) = col_expr {
+                        format!("{}{}[{}, {}] := {}", indent_str, identifier, index_expr.to_prefix(), col.to_prefix(), value.to_prefix())
+                    } else {
+                        format!("{}{}[{}] := {}", indent_str, identifier, index_expr.to_prefix(), value.to_prefix())
+                    }
                 } else {
-                    format!("{}{} <- {}", indent_str, identifier, value.to_prefix())
+                    format!("{}{} := {}", indent_str, identifier, value.to_prefix())
                 }
             }
             Stmt::Decleration { identifier, type_ } => {

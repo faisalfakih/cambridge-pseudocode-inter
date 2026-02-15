@@ -315,9 +315,29 @@ impl Parser {
         let index_expr = self.parse_expr(0)?;
         let index = ast_to_expr(index_expr)?;
 
+        let mut col = None;
+
         // consume ']'
         let close_square = self.advance();
-        if close_square.token_type != TokenType::RSquare {
+        if close_square.token_type == TokenType::Comma { 
+            // multi dimesnional array, check for more ub
+            let col_expr = self.parse_expr(0)?;
+            col = Some(ast_to_expr(col_expr)?);
+            // expect close bracket
+
+            let close_square = self.advance();
+            if close_square.token_type != TokenType::RSquare {
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: "Expected ']' after array index".to_string(),
+                    hint: Some("Array indices must be enclosed in brackets".to_string()),
+                    line: close_square.line,
+                    column: close_square.column,
+                    source: Some(self.source.clone()),
+                });
+            }
+        }
+        else if close_square.token_type != TokenType::RSquare {
             return Err(CPSError {
                 error_type: ErrorType::Syntax,
                 message: "Expected ']' after array index".to_string(),
@@ -331,6 +351,7 @@ impl Parser {
         Ok(Ast::Expression(Expr::ArrayAccess {
             name: name,
             index: Box::new(index),
+            col: col.map(Box::new), 
         }))
     }
 
@@ -962,7 +983,7 @@ impl Parser {
         let identifier = self.advance();
 
         let assign_token = self.peek(0);
-        let array_index: Option<Expr> = None;
+        let array_index = None;
         if assign_token.token_type != TokenType::Arrow && assign_token.token_type != TokenType::LSquare {
             return Err(CPSError { error_type: ErrorType::Syntax, 
                 message: "Expected '<-' in assignment".to_string(), hint: None, 
@@ -971,7 +992,7 @@ impl Parser {
         if assign_token.token_type == TokenType::LSquare {
             // array access
             let array_access = self.parse_array_access_expr(identifier.lexeme.clone())?;
-            if let Ast::Expression(Expr::ArrayAccess { name: _, index }) = array_access {
+            if let Ast::Expression(Expr::ArrayAccess { name: _, index, col }) = array_access {
                 // consume '<-'
                 let assign_token = self.advance();
                 if assign_token.token_type != TokenType::Arrow {
@@ -982,7 +1003,7 @@ impl Parser {
 
                 let value = self.parse_expr(0)?;
 
-                return Ok(Ast::Stmt(Stmt::Assignment { identifier: identifier.lexeme, array_index: Some(*index), value: Box::new(value) }));
+                return Ok(Ast::Stmt(Stmt::Assignment { identifier: identifier.lexeme, array_index: Some((Box::new(*index), col)), value: Box::new(value) }));
             }         
         }
 
@@ -1381,7 +1402,38 @@ impl Parser {
         }
         let upper_bound = self.parse_expr(0);
         let close_square = self.advance();
-        if close_square.token_type != TokenType::RSquare {
+        let mut bounds_2d = None;
+        if close_square.token_type == TokenType::Comma {
+            // [lower:upper, lower:upper]
+            // parsing a 2d array
+            let lower_bound_2 = self.parse_expr(0)?;
+            let colon_token_2 = self.advance();
+            if colon_token_2.token_type != TokenType::Colon {
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: "Expected ':' in array dimension declaration".to_string(),
+                    hint: Some("Array dimensions must be specified as [lower:upper]".to_string()),
+                    line: colon_token_2.line,
+                    column: colon_token_2.column,
+                    source: Some(self.source.clone()),
+                });
+            }
+            let upper_bound_2 = self.parse_expr(0)?;
+            let close_square_2 = self.advance();
+            if close_square_2.token_type != TokenType::RSquare {
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: "Expected ']' after array dimension declaration".to_string(),
+                    hint: Some("Array type must specify dimensions using brackets".to_string()),
+                    line: close_square_2.line,
+                    column: close_square_2.column,
+                    source: Some(self.source.clone()),
+                });
+            }
+
+            bounds_2d = Some((Box::new(ast_to_expr(lower_bound_2)?), Box::new(ast_to_expr(upper_bound_2)?)));
+        }
+        else if close_square.token_type != TokenType::RSquare {
             return Err(CPSError {
                 error_type: ErrorType::Syntax,
                 message: "Expected ']' after array dimension declaration".to_string(),
@@ -1423,6 +1475,7 @@ impl Parser {
         Ok(Type::Array(ArrayType {
             lower_bound: Box::new(ast_to_expr(lower_bound?)?),
             upper_bound: Box::new(ast_to_expr(upper_bound?)?),
+            bounds_2d,
             base_type: Box::new(base_type),
         }))
     }
