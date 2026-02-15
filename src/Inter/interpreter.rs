@@ -351,19 +351,21 @@ impl Interpreter {
                     None => None,
                 };
 
+                let upper_bound_val = if let Some((col_lb, col_ub)) = bounds_2d {
+                    let col_count = col_ub - col_lb + 1;
+                    let row_count = array.len() / col_count;
+                    *lower_bound + row_count - 1
+                } else {
+                    array.len() + *lower_bound - 1
+                };
+
                 Ok(Type::Array(ArrayType {
                     lower_bound: Box::new(Expr::Literal(Value::Integer(*lower_bound as i64))),
-                    let upper_bound_val = if let Some((col_lb, col_ub)) = bounds_2d {
-                        let col_count = col_ub - col_lb + 1;
-                        let row_count = array.len() / col_count;
-                        *lower_bound + row_count - 1
-                    } else {
-                        array.len() + *lower_bound - 1
-                    };
                     upper_bound: Box::new(Expr::Literal(Value::Integer(upper_bound_val as i64))),
                     base_type: Box::new(base_type),
                     bounds_2d: bounds,
                 }))
+
             }
             Value::Identifier(_) => Err(CPSError {
                 error_type: ErrorType::Runtime,
