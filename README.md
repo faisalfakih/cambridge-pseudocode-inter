@@ -41,7 +41,12 @@ winget install MSYS2.MSYS2
 pacman -S --needed base-devel mingw-w64-x86_64-toolchain
 ```
 
-#### Step 6: Close and reopen PowerShell/Terminal and try installing CPS again:
+#### Step 6: Add MinGW to path
+```bash
+msys_path=$(find /c -maxdepth 4 -type d \( -iname msys64 -o -iname msys32 \) 2>/dev/null | head -n1); if [ -z "$msys_path" ]; then echo "❌ MSYS2 not found"; exit 1; fi; mingw_bin="$msys_path/mingw64/bin"; if [ ! -d "$mingw_bin" ]; then echo "❌ mingw64/bin missing"; exit 1; fi; win_path=$(echo "$mingw_bin" | sed 's|/c/|C:/|' | sed 's|/|\\|g'); echo "Adding $win_path to PATH"; powershell.exe -Command "[Environment]::SetEnvironmentVariable('Path', \$env:Path + ';$win_path', 'User')"; echo "✅ Done — restart PowerShell"
+```
+
+#### Step 7: Close and reopen PowerShell/Terminal and try installing CPS again:
 ```bash
 cargo install cambridge-pseudocode-interpreter
 ```
