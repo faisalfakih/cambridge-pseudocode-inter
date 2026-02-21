@@ -37,13 +37,21 @@ impl std::fmt::Display for ErrorType {
 
 impl std::fmt::Display for CPSError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let _ = writeln!(f, "{}: {} Error at line {}, column {}: {}",
-            "ERROR".bright_red().bold(),
-            format!("{:?}", self.error_type).bright_red(),
-            self.line,
-            self.column,
-            self.message
-        );
+        if self.line == 0 && self.column == 0 {
+            let _ = writeln!(f, "{}: {}: {}",
+                "ERROR".bright_red().bold(),
+                format!("{:?} Error", self.error_type).bright_red(),
+                self.message
+            );
+        } else {
+            let _ = writeln!(f, "{}: {} at line {}, column {}: {}",
+                "ERROR".bright_red().bold(),
+                format!("{:?} Error", self.error_type).bright_red(),
+                self.line,
+                self.column,
+                self.message
+            );
+        }
         if let Some(source) = &self.source {
             let lines: Vec<&str> = source.lines().collect();
             
@@ -61,9 +69,13 @@ impl std::fmt::Display for CPSError {
         }
         
         if let Some(hint) = &self.hint {
-            write!(f, "{}: {}", "HINT".bright_yellow().bold(), hint)
-        } else {
-            Ok(())
-        }
+            let _ = writeln!(f, "{}: {}", "HINT".bright_yellow().bold(), hint);
+        } 
+
+        write!(f, "\n{}",
+            format!("Think this is a bug in the interpreter? Report it: {}",
+                "https://github.com/faisalfakih/cambridge-psudocode-inter/issues".bright_blue().underline()
+            ).dimmed()
+        )
     }
 }

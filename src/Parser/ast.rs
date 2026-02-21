@@ -1,5 +1,12 @@
 use crate::{Inter::cps::{Type, Value}, Lexer::lexer::TokenType};
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileMode {
+    Read,
+    Write,
+    Append,
+}
+
 #[derive(Debug, Clone)]
 pub struct Operator {
     pub precedence: Precedence,
@@ -42,6 +49,7 @@ pub enum Expr {
     Literal(Value),
     Call { name: String, arguments: Vec<Expr> },
     ArrayAccess { name: String, index: Box<Expr>, col: Option<Box<Expr>> }, // col for 2D arrays, the index exists for both 1D and 2D arrays but would be the row in a 2d array     
+    EOF { filename: String },
 }
 
 
@@ -71,7 +79,10 @@ pub enum Stmt {
         body: BlockStmt,
     },
     Return { value: Box<Expr> },
-    Call { name: String, arguments: Vec<Expr> },
+    Call { name: String, arguments: Vec<Expr> }, 
+    OpenFile { filename: Box<Expr>, mode: FileMode, stmts: BlockStmt, close_expr: Box<Expr> },
+    ReadFile { filename: Box<Expr>, target: Box<Expr> },
+    WriteFile { filename: Box<Expr>, value: Box<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +163,7 @@ impl Expr {
                     format!("{}[{}]", name, index.to_prefix())
                 }
             }
+            Expr::EOF { filename } => format!("EOF({})", filename),
         }
     }
 }
@@ -289,6 +301,26 @@ impl Stmt {
             }
             Stmt::Return { value } => {
                 format!("{}RETURN {:?}", indent_str, *value)
+            }
+            Stmt::OpenFile { filename, mode, stmts, close_expr } => {
+                let mode_str = match mode {
+                    FileMode::Read => "READ",
+                    FileMode::Write => "WRITE",
+                    FileMode::Append => "APPEND",
+                };
+                let mut result = format!("{}OPENFILE {} MODE {}\n", indent_str, filename.to_prefix(), mode_str);
+                for stmt in &stmts.statements {
+                    result.push_str(&stmt.to_prefix(indent + 1));
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}CLOSEFILE {}", indent_str, close_expr.to_prefix()));
+                result
+            }
+            Stmt::ReadFile { filename, target } => {
+                format!("{}READFILE {} INTO {}", indent_str, filename.to_prefix(), target.to_prefix())
+            }
+            Stmt::WriteFile { filename, value } => {
+                format!("{}WRITEFILE {} FROM {}", indent_str, filename.to_prefix(), value.to_prefix())
             }
         }
     }

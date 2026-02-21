@@ -1,9 +1,10 @@
+use std::fs::{self, File};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::errortype::{CPSError, ErrorType};
 use crate::Inter::cps::{ArrayType, Environment, Function, Type, Value};
 use crate::Lexer::lexer::TokenType;
-use crate::Parser::ast::{Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, Stmt};
+use crate::Parser::ast::{Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, Stmt};
 use crate::Parser::parser::ast_to_expr;
 
 const BUILTIN_FUNCTIONS: &[&str] = &[
@@ -99,6 +100,9 @@ impl Interpreter {
                 Ok(())
             }
             Stmt::For { identifier, start, end, body } => self.evaluate_for(identifier, start, end, body),
+            Stmt::OpenFile { filename, mode, stmts, close_expr } => self.evaluate_open_file(filename, mode, stmts, close_expr),
+            Stmt::WriteFile { filename, value } => self.evaluate_write_file(filename, value),
+            Stmt::ReadFile { filename, target } => self.evaluate_read_file(filename, target),
             _ => {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
@@ -833,6 +837,115 @@ impl Interpreter {
         Ok(())
     }
 
+    fn evaluate_open_file(&mut self, filename: &Box<Expr>, mode: &FileMode, stmts: &BlockStmt, close_expr: &Box<Expr>) -> Result<(), CPSError> {
+        let filename_value = self.evaluate_expr(filename)?;
+        let filename_str;
+        match &filename_value {
+            Value::String(str) => filename_str = str,
+            _ => {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Filename in OPENFILE statement must evaluate to a string, got: {:?}", filename_value),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                });
+            }
+        }
+
+        self.current_env.borrow_mut().openfile(&filename_str, mode)?;
+
+        for stmt in &stmts.statements {
+            self.evaluate_stmt(stmt)?;
+        }
+
+        // close the file
+        self.current_env.borrow_mut().closefile(&filename_str, mode)?;
+
+        Ok(())
+
+    }
+
+    fn evaluate_write_file(&mut self, filename: &Box<Expr>, value: &Box<Expr>) -> Result<(), CPSError> {
+        let filename_value = self.evaluate_expr(filename)?;
+        let filename_str;
+        match &filename_value {
+            Value::String(str) => filename_str = str,
+            _ => {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Filename in WRITEFILE statement must evaluate to a string, got: {:?}", filename_value),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                });
+            }
+        }
+
+        let value_to_write = self.evaluate_expr(value)?;
+
+        self.current_env.borrow_mut().writefile(&filename_str, &value_to_write)
+    }
+
+    fn evaluate_read_file(&mut self, filename: &Box<Expr>, target: &Box<Expr>) -> Result<(), CPSError> {
+        let filename_value = self.evaluate_expr(filename)?;
+        let filename_str = match &filename_value {
+            Value::String(s) => s.clone(),
+            _ => return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Filename in READFILE must be a string, got: {:?}", filename_value),
+                hint: None,
+                line: 0, column: 0, source: None,
+            }),
+        };
+
+        let line = self.current_env.borrow_mut().readfile(&filename_str)?;
+
+        // assign the line to the target variable
+        match target.as_ref() {
+            Expr::Literal(Value::Identifier(iden)) => {
+                self.current_env
+                    .borrow_mut()
+                    .set(iden, Value::String(line))
+                    .map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to assign READFILE result to '{}': {}", iden, e.message),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    })
+            }
+            Expr::ArrayAccess { name, index, col } => {
+                let index_value = self.evaluate_expr(index)?;
+                let index_int = self.value_to_index(&index_value, name)?;
+                let col_int = match col {
+                    Some(col_expr) => {
+                        let col_value = self.evaluate_expr(col_expr)?;
+                        Some(self.value_to_index(&col_value, name)?)
+                    }
+                    None => None,
+                };
+                self.current_env
+                    .borrow_mut()
+                    .set_array_element(name, index_int as usize, col_int.map(|c| c as usize), Value::String(line))
+                    .map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to assign READFILE result to array element: {}", e.message),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    })
+            }
+            _ => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("READFILE target must be a variable or array element, got: {:?}", target),
+                hint: None,
+                line: 0, column: 0, source: None,
+            }),
+        }
+    }
+
+
 
     fn evaluate_declaration_stmt(&mut self, identifier: &String, type_: &Type) -> Result<(), CPSError> {
         let inital_value = match type_ {
@@ -1143,6 +1256,10 @@ impl Interpreter {
             Expr::Literal(value) => self.evaluate_literal(value),
             Expr::Call { name, arguments } => self.evaluate_call(name, arguments),
             Expr::ArrayAccess { name, index, col } => self.evaluate_array_access(name, index, col),
+            Expr::EOF { filename } => {
+                let is_eof = self.current_env.borrow().is_eof(filename)?;
+                Ok(Value::Boolean(is_eof))
+            }
             // _ => {
             //     return Err(CPSError {
             //         error_type: ErrorType::Runtime,
