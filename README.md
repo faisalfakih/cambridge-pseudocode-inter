@@ -29,7 +29,7 @@ winget install Rustlang.Rust.GNU
 cargo install cambridge-pseudocode-interpreter
 ```
 
-##### If this raises an error then try:
+#### If this raises an error then try:
 #### Step 4: Install MSYS2 
 ```bash
 winget install MSYS2.MSYS2
@@ -43,7 +43,7 @@ pacman -S --needed base-devel mingw-w64-x86_64-toolchain
 
 #### Step 6: Add MinGW to path
 ```bash
-msys_path=$(find /c -maxdepth 4 -type d \( -iname msys64 -o -iname msys32 \) 2>/dev/null | head -n1); if [ -z "$msys_path" ]; then echo "❌ MSYS2 not found"; exit 1; fi; mingw_bin="$msys_path/mingw64/bin"; if [ ! -d "$mingw_bin" ]; then echo "❌ mingw64/bin missing"; exit 1; fi; win_path=$(echo "$mingw_bin" | sed 's|/c/|C:/|' | sed 's|/|\\|g'); echo "Adding $win_path to PATH"; powershell.exe -Command "[Environment]::SetEnvironmentVariable('Path', \$env:Path + ';$win_path', 'User')"; echo "✅ Done — restart PowerShell"
+msys_path=$(find /c -maxdepth 4 -type d \( -iname msys64 -o -iname msys32 \) 2>/dev/null | head -n1); [ -z "$msys_path" ] && { echo "❌ MSYS2 not found"; exit 1; }; mingw_bin="$msys_path/mingw64/bin"; [ ! -d "$mingw_bin" ] && { echo "❌ mingw64/bin missing"; exit 1; }; win_path=$(echo "$mingw_bin" | sed 's|^/\([a-zA-Z]\)/|\1:/|' | sed 's|/|\\|g'); echo "Adding $win_path to PATH"; powershell.exe -Command "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$win_path', 'User')"; echo "✅ Done — restart PowerShell"
 ```
 
 #### Step 7: Close and reopen PowerShell/Terminal and try installing CPS again:
