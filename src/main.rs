@@ -33,7 +33,14 @@ fn main() {
             .help("Only parse the file and print the AST")
             .action(clap::ArgAction::SetTrue)
         )
+        .arg(Arg::new("time")
+            .short('t')
+            .long("time")
+            .help("Print how long the program took to run")
+            .action(clap::ArgAction::SetTrue)
+        )
         .get_matches();
+
 
     // get the file argument
     let filename = matches
@@ -43,6 +50,9 @@ fn main() {
 
     let verbose = matches.get_flag("verbose");
     let parse_only = matches.get_flag("parse");
+    let show_time = matches.get_flag("time");
+
+    let start = std::time::Instant::now();
 
     // read from file
     let contents = match fs::read_to_string(filename) {
@@ -97,6 +107,15 @@ fn main() {
     let mut interpreter = Inter::interpreter::Interpreter::new();
     if let Err(e) = interpreter.interpret(ast) {
         eprintln!("{}", e);
+        if show_time {
+            let elapsed = start.elapsed();
+            eprintln!("Execution time: {:.3}ms", elapsed.as_secs_f64() * 1000.0);
+        }
         process::exit(1);
+    }
+
+    if show_time {
+        let elapsed = start.elapsed();
+        eprintln!("Execution time: {:.3}ms", elapsed.as_secs_f64() * 1000.0);
     }
 }

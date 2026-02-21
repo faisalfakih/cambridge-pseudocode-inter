@@ -1,5 +1,5 @@
 use crate::{errortype::{CPSError, ErrorType}, Inter::cps::Value};
-use rand::Rng;
+use rand::random_range;
 
 pub fn call_builtin(name: String, args: &[Value]) -> Result<Option<Value>, CPSError> {
     match name.as_str() {
@@ -53,20 +53,20 @@ fn expect_int(value: &Value, func: &str, pos: usize) -> Result<i64, CPSError> {
     }
 }
 
-fn expect_real(value: &Value, func: &str, pos: usize) -> Result<f64, CPSError> {
-    match value {
-        Value::Real(r) => Ok(*r),
-        Value::Integer(i) => Ok(*i as f64),
-        _ => Err(CPSError {
-            error_type: ErrorType::Runtime,
-            message: format!("{} argument {} must be a real number", func, pos),
-            hint: None,
-            line: 0,
-            column: 0,
-            source: None,
-        })
-    }
-}
+// fn expect_real(value: &Value, func: &str, pos: usize) -> Result<f64, CPSError> {
+//     match value {
+//         Value::Real(r) => Ok(*r),
+//         Value::Integer(i) => Ok(*i as f64),
+//         _ => Err(CPSError {
+//             error_type: ErrorType::Runtime,
+//             message: format!("{} argument {} must be a real number", func, pos),
+//             hint: None,
+//             line: 0,
+//             column: 0,
+//             source: None,
+//         })
+//     }
+// }
 
 fn arg_count_error(func: &str, expected: usize, got: usize) -> CPSError {
     CPSError {
@@ -248,7 +248,6 @@ fn builtin_rand(args: &[Value]) -> Result<Option<Value>, CPSError> {
         });
     }
 
-    let mut rng = rand::rng();
-    let result = rng.random_range(0.0..(upper as f64));
+    let result: f64 = random_range(0.0..upper as f64);
     Ok(Some(Value::Real(result)))
 }
