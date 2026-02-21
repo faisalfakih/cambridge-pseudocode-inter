@@ -14,7 +14,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Install Rust
 cargo install cambridge-pseudocode-interpreter                   # Then install the CPS interpreter
 ```
 
-### Windows Users
+### Windows Users:
 
 #### Step 1: Install Rust (PowerShell or CMD)
 ```bash
@@ -25,6 +25,23 @@ winget install Rustlang.Rust.GNU
 (This loads Rust into PATH)
 
 #### Step 3: Now install CPS
+```bash
+cargo install cambridge-pseudocode-interpreter
+```
+
+##### If this raises an error then try:
+#### Step 4: Install MSYS2 
+```bash
+winget install MSYS2.MSYS2
+```
+
+#### Step 5: Open MSYS2 terminal and run:
+> NOTE: To paste this command into the MSYS2 terminal right-click and select "Paste" as Ctrl+V doesn't work in MSYS2
+```bash
+pacman -S --needed base-devel mingw-w64-x86_64-toolchain
+```
+
+#### Step 6: Close and reopen PowerShell/Terminal and try installing CPS again:
 ```bash
 cargo install cambridge-pseudocode-interpreter
 ```
