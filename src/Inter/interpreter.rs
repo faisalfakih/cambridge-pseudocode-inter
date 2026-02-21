@@ -861,6 +861,28 @@ impl Interpreter {
         }
 
         // close the file
+        let close_value = self.evaluate_expr(close_expr)?;
+        let close_str = match &close_value {
+            Value::String(s) => s,
+            _ => {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("CLOSEFILE expression must evaluate to a string, got: {:?}", close_value),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                });
+            }
+        };
+        if filename_str != close_str {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("CLOSEFILE filename '{}' does not match OPENFILE filename '{}'", close_str, filename_str),
+                hint: Some("CLOSEFILE must reference the same file as OPENFILE".to_string()),
+                line: 0, column: 0, source: None,
+            });
+        }
         self.current_env.borrow_mut().closefile(&filename_str, mode)?;
 
         Ok(())

@@ -330,16 +330,24 @@ impl Environment {
     }
 
     pub fn closefile(&mut self, name: &str, mode: &FileMode) -> Result<(), CPSError> {
-        if let Some(open_file) = self.open_files.get(name) {
+        if let Some(open_file) = self.open_files.get_mut(name) {
             if &open_file.mode != mode {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
                     message: format!("Cannot close file '{}': opened in {:?} mode but attempting to close in {:?} mode", name, open_file.mode, mode),
                     hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
+                    line: 0, column: 0, source: None,
                 });
+            }
+            // flush before closing
+            if let Some(handle) = &mut open_file.handle {
+                use std::io::Write;
+                handle.0.flush().map_err(|e| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Failed to flush file '{}' before closing: {}", name, e),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                })?;
             }
             self.open_files.remove(name);
             return Ok(());
@@ -350,12 +358,11 @@ impl Environment {
                 error_type: ErrorType::Runtime,
                 message: format!("Cannot close file '{}': file is not open", name),
                 hint: None,
-                line: 0,
-                column: 0,
-                source: None,
+                line: 0, column: 0, source: None,
             }),
         }
     }
+
 
     pub fn openfile(&mut self, name: &str, mode: &FileMode) -> Result<(), CPSError> {
         if self.is_file_open_conflicting(name, mode) {
