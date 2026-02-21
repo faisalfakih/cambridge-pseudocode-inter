@@ -1363,6 +1363,7 @@ impl Parser {
             TokenType::String => Type::String,
             TokenType::Char => Type::Char,
             TokenType::Boolean => Type::Boolean,
+            TokenType::Array => self.parse_array_type()?,
             _ => {
                 return Err(CPSError {
                     error_type: ErrorType::Syntax,
