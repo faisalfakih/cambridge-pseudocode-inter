@@ -4,7 +4,7 @@ A Rust-based interpreter for Cambridge International AS & A Level Computer Scien
 
 ## 📦 Installation
 
-### Quick Install (Recommended)
+### Quick Install:
 
 <!-- > **Don't have Rust?** Install it from [here](https://rust-lang.org/tools/install/). -->
 
@@ -14,7 +14,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Install Rust
 cargo install cambridge-pseudocode-interpreter                   # Then install the CPS interpreter
 ```
 
-### Windows Users:
+### Windows:
 
 #### Step 1: Install Rust (PowerShell or CMD)
 ```bash
@@ -52,6 +52,11 @@ After installation, the `cps` command will be available globally:
 ```bash
 cps --version
 cps --help
+```
+---
+### To update CPS, run
+```bash
+cargo install cambridge-pseudocode-interpreter --force
 ```
 
 
