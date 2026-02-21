@@ -445,11 +445,10 @@ impl Parser {
         }
     }
 
-
     fn parse_output(&mut self) -> Result<Ast, CPSError> {
-        // consume 'output' token
-        let output_token = self.advance();
-        let expr = match self.parse_expr(0)? {
+        let output_token = self.advance(); // consume 'output'
+
+        let first = match self.parse_expr(0)? {
             Ast::Expression(e) => e,
             Ast::Identifier(id) => Expr::Literal(Value::Identifier(id)),
             _ => {
@@ -463,8 +462,40 @@ impl Parser {
                 });
             }
         };
-        Ok(Ast::Stmt(Stmt::Output { target: expr }))
+        
+        // Treat ',' as concatinators in output statements
+        if self.peek(0).token_type != TokenType::Comma {
+            return Ok(Ast::Stmt(Stmt::Output { target: first }));
+        }
+
+        let mut combined = first; 
+        while self.peek(0).token_type == TokenType::Comma {
+            self.advance(); // consume ','
+            let next = match self.parse_expr(0)? {
+                Ast::Expression(e) => e,
+                Ast::Identifier(id) => Expr::Literal(Value::Identifier(id)),
+                _ => {
+                    return Err(CPSError {
+                        error_type: ErrorType::Syntax,
+                        message: format!("Expected an expression after ',' in {}", output_token.lexeme),
+                        hint: Some("Each value separated by ',' must be a valid expression".to_string()),
+                        line: output_token.line,
+                        column: output_token.column,
+                        source: Some(self.source.clone()),
+                    });
+                }
+            };
+            combined = Expr::Binary(BinaryExpr {
+                left: Box::new(Ast::Expression(combined)),
+                operator: TokenType::Ampersand,
+                right: Box::new(Ast::Expression(next)),
+            });
+        }
+
+        Ok(Ast::Stmt(Stmt::Output { target: combined }))
     }
+
+
 
     fn parse_input(&mut self) -> Result<Ast, CPSError> {
         let input_token = self.advance(); // consume 'input'

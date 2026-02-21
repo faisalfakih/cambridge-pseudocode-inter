@@ -103,16 +103,25 @@ impl Interpreter {
             Stmt::OpenFile { filename, mode, stmts, close_expr } => self.evaluate_open_file(filename, mode, stmts, close_expr),
             Stmt::WriteFile { filename, value } => self.evaluate_write_file(filename, value),
             Stmt::ReadFile { filename, target } => self.evaluate_read_file(filename, target),
-            _ => {
+            Stmt::Return { value } => {
+                let val = self.evaluate_expr(value)?;
                 return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Unsupported statement in interpreter: {:?}", statement),
+                    error_type: ErrorType::Return(val),
+                    message: String::new(),
                     hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
+                    line: 0, column: 0, source: None,
                 });
             }
+            // _ => {
+            //     return Err(CPSError {
+            //         error_type: ErrorType::Runtime,
+            //         message: format!("Unsupported statement in interpreter: {:?}", statement),
+            //         hint: None,
+            //         line: 0,
+            //         column: 0,
+            //         source: None,
+            //     });
+            // }
 
         }
     }
@@ -1185,14 +1194,13 @@ impl Interpreter {
         self.current_env = new_env;
         let mut return_value = None;
         for stmt in &func_value.body.statements {
-            match stmt {
-                Stmt::Return { value } => {
-                    return_value = Some(self.evaluate_expr(value)?);
-                    break; 
+            match self.evaluate_stmt(stmt) {
+                Ok(_) => {}
+                Err(CPSError { error_type: ErrorType::Return(val), .. }) => {
+                    return_value = Some(val);
+                    break;
                 }
-                _ => {
-                    self.evaluate_stmt(stmt)?;
-                }
+                Err(e) => return Err(e),
             }
         }
 

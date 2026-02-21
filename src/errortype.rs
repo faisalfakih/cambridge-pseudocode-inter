@@ -1,12 +1,14 @@
 use std::error::Error;
 use colored::Colorize;
 
+use crate::Inter::cps::Value;
+
 
 #[derive(Debug, Clone)]
 pub enum ErrorType {
     Lexical, 
     Syntax,
-    Semantic,
+    Return(Value), // For return in functions (as a call, not an error)
     Runtime,
 }
 
@@ -27,8 +29,8 @@ impl std::fmt::Display for ErrorType {
         match self {
             ErrorType::Lexical => write!(f, "Lexical"),
             ErrorType::Syntax => write!(f, "Syntax"),
-            ErrorType::Semantic => write!(f, "Semantic"),
-            ErrorType::Runtime => write!(f, "Runtime")
+            ErrorType::Runtime => write!(f, "Runtime"),
+            ErrorType::Return(_) => write!(f, "Return"),
         }
     }
 }
