@@ -409,6 +409,7 @@ impl Parser {
             TokenType::Output => self.parse_output().map_err(|e| (e, false)),
             TokenType::Input => self.parse_input().map_err(|e| (e, false)),
             TokenType::Declare => self.parse_declaration().map_err(|e| (e, false)),
+            TokenType::Constant => self.parse_constant_declaration().map_err(|e| (e, false)),
             TokenType::Identifier => self.parse_assignment().map_err(|e| (e, false)),
             TokenType::For => self.parse_for_statement().map_err(|e| (e, false)),
             TokenType::Procedure => self.parse_procedure().map_err(|e| (e, false)),
@@ -1038,6 +1039,51 @@ impl Parser {
         };
 
         Ok(Ast::Stmt(Stmt::Decleration { identifier: identifier.lexeme, type_: data_type }))
+    }
+
+    fn parse_constant_declaration(&mut self) -> Result<Ast, CPSError> {
+        self.advance();
+        // expect identifier 
+        let identifier = self.advance();
+        if identifier.token_type != TokenType::Identifier {
+            return Err(CPSError { error_type: ErrorType::Syntax, 
+                message: "Expected an identifier after constant".to_string(), hint: Some("Make sure to write a name after CONSTANT".to_string()), 
+                line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
+        }
+
+        // consume equals
+        let equals = self.advance();
+        if equals.token_type != TokenType::Equal {
+            return Err(CPSError { error_type: ErrorType::Syntax, 
+                message: "Expected '=' after the identifier".to_string(), hint: Some("Make sure to use '=' after the constant name".to_string()), 
+                line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
+        }
+
+        let value_expr = self.parse_expr(0)?;
+        let value = self.ast_to_value(value_expr);
+
+        match value {
+            Ok(v) => Ok(Ast::Stmt(Stmt::Constant { identifier: identifier.lexeme, value: v })),
+            Err(_) => Err(CPSError { error_type: ErrorType::Syntax, 
+                message: "Expected a literal value for constant declaration".to_string(), hint: Some("Only literals can be used as the value of a constant. A variable, another constant or an expression must never
+be used.".to_string()), 
+                line: identifier.line, column: identifier.column, source: Some(self.source.clone()) }),
+        }
+
+    }
+
+    fn ast_to_value(&self, ast: Ast) -> Result<Value, CPSError> {
+        match ast {
+            Ast::Expression(e) => match e {
+                Expr::Literal(v) => Ok(v),
+                _ => Err(CPSError { error_type: ErrorType::Syntax, 
+                    message: "Expected a literal value".to_string(), hint: None, 
+                    line: 0, column: 0, source: Some(self.source.clone()) }),
+            },
+            _ => Err(CPSError { error_type: ErrorType::Syntax, 
+                message: "Expected a literal value".to_string(), hint: None, 
+                line: 0, column: 0, source: Some(self.source.clone()) }),
+        }
     }
 
     fn parse_assignment(&mut self) -> Result<Ast, CPSError> {

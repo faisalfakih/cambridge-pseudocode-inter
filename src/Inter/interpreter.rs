@@ -112,6 +112,7 @@ impl Interpreter {
                     line: 0, column: 0, source: None,
                 });
             }
+            Stmt::Constant { identifier, value } => self.evaluate_constant(identifier, value),
             // _ => {
             //     return Err(CPSError {
             //         error_type: ErrorType::Runtime,
@@ -462,7 +463,7 @@ impl Interpreter {
         // first declare the loop variable
         self.current_env
             .borrow_mut()
-            .define(identifier.to_owned(), Value::Integer(start_int.to_owned()));
+            .define(identifier.to_owned(), Value::Integer(start_int.to_owned()))?;
 
         for i in start_int.to_owned()..=end_int.to_owned() {
             self.current_env
@@ -1083,7 +1084,14 @@ impl Interpreter {
 
         self.current_env
             .borrow_mut()
-            .define(identifier.to_owned(), inital_value);
+            .define(identifier.to_owned(), inital_value)?;
+        Ok(())
+    }
+
+    fn evaluate_constant(&mut self, identifier: &String, value: &Value) -> Result<(), CPSError> {
+        self.current_env
+            .borrow_mut()
+            .declare_constant(&identifier, value)?;
         Ok(())
     }
 
@@ -1112,7 +1120,7 @@ impl Interpreter {
 
         self.current_env
             .borrow_mut()
-            .define(identifier.to_owned(), function_value.clone());
+            .define(identifier.to_owned(), function_value)?;
 
 
         // self.evaluate_assignment_stmt(
@@ -1120,10 +1128,6 @@ impl Interpreter {
         //     &Ast::Expression(Expr::Literal(function_value))
         // )?;
 
-        self.current_env.borrow_mut().set(
-            identifier, 
-            function_value
-        )?;
 
 
         Ok(())
@@ -1187,7 +1191,7 @@ impl Interpreter {
                     source: None,
                 });
             }
-            new_env.borrow_mut().define(param_name.to_owned(), arg_value.clone());
+            new_env.borrow_mut().define(param_name.to_owned(), arg_value.clone())?;
         }
 
         let previous_env = Rc::clone(&self.current_env);
@@ -1274,7 +1278,7 @@ impl Interpreter {
 
         self.current_env
             .borrow_mut()
-            .define(identifier.to_owned(), function_value.clone());
+            .define(identifier.to_owned(), function_value.clone())?;
 
         Ok(())
     }

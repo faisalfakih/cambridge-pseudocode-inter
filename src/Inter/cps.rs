@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -91,6 +91,7 @@ pub struct Environment {
     pub bindings: HashMap<String, Value>,
     parent: Option<Rc<RefCell<Environment>>>,
     pub open_files: HashMap<String, OpenFile>, // track open files by variable name
+    constants: HashSet<String>, // track constant variable names
 }
 
 impl Environment {
@@ -99,6 +100,7 @@ impl Environment {
             bindings: HashMap::new(),
             parent: None,
             open_files: HashMap::new(),
+            constants: HashSet::new(),
         }));
         
         // declare builtin functions here
@@ -107,23 +109,24 @@ impl Environment {
         global
     }
 
-    fn register_builtins(env: Rc<RefCell<Environment>>) {
-        env.borrow_mut()
-            .define("RIGHT".to_string(), Value::Function(Function {
-                parameters: vec![
-                    ("string".to_string(), Type::String),
-                    ("length".to_string(), Type::Integer),
-                ],
-                return_type: Some(Type::String),
-                body: BlockStmt { statements: vec![] },
-            }));
-    }
+    // fn register_builtins(env: Rc<RefCell<Environment>>) {
+    //     env.borrow_mut()
+    //         .define("RIGHT".to_string(), Value::Function(Function {
+    //             parameters: vec![
+    //                 ("string".to_string(), Type::String),
+    //                 ("length".to_string(), Type::Integer),
+    //             ],
+    //             return_type: Some(Type::String),
+    //             body: BlockStmt { statements: vec![] },
+    //         }));
+    // }
 
     pub fn new_child(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
             parent: Some(parent),
             open_files: HashMap::new(),
+            constants: HashSet::new(),
         }))
     }
 
@@ -142,6 +145,15 @@ impl Environment {
     }
 
     pub fn set(&mut self, name: &str, value: Value) -> Result<(), CPSError> {
+        if self.is_constant(name) {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot modify constant '{}'", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            });
+        }
+
         if self.bindings.contains_key(name) {
             self.bindings.insert(name.to_string(), value);
             return Ok(());
@@ -150,15 +162,14 @@ impl Environment {
         match &self.parent {
             Some(parent_rc) => parent_rc.borrow_mut().set(name, value),
             None => Err(CPSError {
-                error_type: crate::errortype::ErrorType::Runtime,
+                error_type: ErrorType::Runtime,
                 message: format!("Undefined variable '{}'", name),
                 hint: Some("Check if the variable is declared before use.".to_string()),
-                line: 0,
-                column: 0,
-                source: None,
+                line: 0, column: 0, source: None,
             }),
         }
     }
+
 
 
     pub fn set_array_element(&mut self, name: &str, index: usize, col: Option<usize>, value: Value) -> Result<(), CPSError> {
@@ -652,10 +663,43 @@ impl Environment {
         }
     }
 
+    pub fn declare_constant(&mut self, name: &str, value: &Value) -> Result<(), CPSError> {
+        if self.constants.contains(name) {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Constant '{}' is already declared", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            });
+        }
+        self.define(name.to_string(), value.clone())?;
+        self.constants.insert(name.to_string());
+        Ok(())
+    }
+
+    pub fn is_constant(&self, name: &str) -> bool {
+        if self.constants.contains(name) {
+            return true;
+        }
+        match &self.parent {
+            Some(parent_rc) => parent_rc.borrow().is_constant(name),
+            None => false,
+        }
+    }
 
 
-    pub fn define(&mut self, name: String, value: Value) {
+
+    pub fn define(&mut self, name: String, value: Value) -> Result<(), CPSError> {
+        if self.constants.contains(&name) {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot redefine constant '{}'", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            });
+        }
         self.bindings.insert(name, value);
+        Ok(())
     }
 
 }

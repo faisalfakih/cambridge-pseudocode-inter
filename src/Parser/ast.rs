@@ -63,6 +63,7 @@ pub enum Stmt {
     Repeat { body: BlockStmt, until: Box<Expr> },
     For { identifier: String, start: Box<Expr>, end: Box<Expr>, body: BlockStmt },
     Assignment { identifier: String, array_index: Option<(Box<Expr>, Option<Box<Expr>>)>, value: Box<Ast> },
+    Constant { identifier: String, value: Value },
     Decleration { identifier: String, type_: Type},
     Input { identifier: Box<Expr> }, 
     Output { target: Expr },
@@ -255,6 +256,9 @@ impl Stmt {
             }
             Stmt::Decleration { identifier, type_ } => {
                 format!("{}DECLARE {} : {:?}", indent_str, identifier, type_)
+            }
+            Stmt::Constant { identifier, value } => {
+                format!("{}CONST {} = {:?}", indent_str, identifier, value)
             }
             Stmt::Input { identifier } => {
                 format!("{}INPUT {}", indent_str, identifier.to_prefix())
