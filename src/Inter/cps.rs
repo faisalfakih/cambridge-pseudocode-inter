@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::fs::{self, File};
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use crate::errortype::CPSError;
-use crate::Parser::ast::{BlockStmt, Expr, Stmt};
+use crate::errortype::{CPSError, ErrorType};
+use crate::Parser::ast::{BlockStmt, Expr, FileMode};
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -15,8 +16,8 @@ pub enum Type {
     Char,
     Function,
     Array(ArrayType),
-    Record(String), 
-    Enum(String),
+    // Record(String), 
+    // Enum(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +49,27 @@ pub enum FunctionType {
     Builtin(BuiltinFunction),
 }
 
+
+#[derive(Debug)]
+pub struct CloneableFile(File);
+
+impl Clone for CloneableFile {
+    fn clone(&self) -> Self {
+        CloneableFile(self.0.try_clone().expect("Failed to clone file handle"))
+    }
+}
+
+
+
+#[derive(Clone, Debug)]
+pub struct OpenFile {
+    pub mode: FileMode,
+    pub lines: Option<Vec<String>>, // buffer lines in read mode
+    pub line_idx: usize,
+    pub handle: Option<CloneableFile>, // file handle for write/append mode
+}
+
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BuiltinFunction {
     pub name: String,
@@ -67,7 +89,8 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub struct Environment {
     pub bindings: HashMap<String, Value>,
-    parent: Option<Rc<RefCell<Environment>>>
+    parent: Option<Rc<RefCell<Environment>>>,
+    pub open_files: HashMap<String, OpenFile>, // track open files by variable name
 }
 
 impl Environment {
@@ -75,6 +98,7 @@ impl Environment {
         let global = Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
             parent: None,
+            open_files: HashMap::new(),
         }));
         
         // declare builtin functions here
@@ -99,6 +123,7 @@ impl Environment {
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
             parent: Some(parent),
+            open_files: HashMap::new(),
         }))
     }
 
@@ -286,6 +311,271 @@ impl Environment {
             }
         }
     }
+
+    pub fn is_file_open_conflicting(&self, name: &str, requested_mode: &FileMode) -> bool {
+        if let Some(open_file) = self.open_files.get(name) {
+            return match (&open_file.mode, requested_mode) {
+                (FileMode::Read, FileMode::Read) => true,   // can't open twice for read
+                (FileMode::Write, FileMode::Append) => true, // conflicting
+                (FileMode::Append, FileMode::Write) => true, // conflicting
+                (FileMode::Write, FileMode::Write) => true,  // same mode, conflict
+                (FileMode::Append, FileMode::Append) => true, // same mode, conflict
+                _ => false,
+            };
+        }
+        match &self.parent {
+            Some(parent_rc) => parent_rc.borrow().is_file_open_conflicting(name, requested_mode),
+            None => false,
+        }
+    }
+
+    pub fn closefile(&mut self, name: &str, mode: &FileMode) -> Result<(), CPSError> {
+        if let Some(open_file) = self.open_files.get_mut(name) {
+            if &open_file.mode != mode {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Cannot close file '{}': opened in {:?} mode but attempting to close in {:?} mode", name, open_file.mode, mode),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                });
+            }
+            // flush before closing
+            if let Some(handle) = &mut open_file.handle {
+                use std::io::Write;
+                handle.0.flush().map_err(|e| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Failed to flush file '{}' before closing: {}", name, e),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                })?;
+            }
+            self.open_files.remove(name);
+            return Ok(());
+        }
+        match &mut self.parent {
+            Some(parent_rc) => parent_rc.borrow_mut().closefile(name, mode),
+            None => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot close file '{}': file is not open", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            }),
+        }
+    }
+
+
+    pub fn openfile(&mut self, name: &str, mode: &FileMode) -> Result<(), CPSError> {
+        if self.is_file_open_conflicting(name, mode) {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot open file '{}': file is already open", name),
+                hint: None,
+                line: 0,
+                column: 0,
+                source: None,
+            });
+        }
+
+        let file = match mode {
+            FileMode::Write => {
+                let f = fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(name)
+                    .map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to open file '{}': {}", name, e),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    })?;
+                CloneableFile(f)
+            }
+            FileMode::Append => {
+                let f = fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(name)
+                    .map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to open file '{}': {}", name, e),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    })?;
+                CloneableFile(f)
+            }
+            FileMode::Read => {
+                let f = fs::OpenOptions::new()
+                    .read(true)
+                    .open(name)
+                    .map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to open file '{}': {}", name, e),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    })?;
+                CloneableFile(f)
+            }
+        };
+
+        self.open_files.insert(name.to_string(), OpenFile { mode: mode.clone(), handle: Some(file), line_idx: 0, lines: None, });
+        Ok(())
+    }
+
+    pub fn writefile(&mut self, filename: &str, value: &Value) -> Result<(), CPSError> {
+        if let Some(open_file) = self.open_files.get_mut(filename) {
+            if open_file.mode == FileMode::Read {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Cannot write to file '{}': file is opened in read mode", filename),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                });
+            }
+
+            if let Some(handle) = &mut open_file.handle {
+                use std::io::Write;
+                let output = match value {
+                    Value::Integer(i) => i.to_string(),
+                    Value::Real(f) => f.to_string(),
+                    Value::String(s) => s.clone(),
+                    Value::Boolean(b) => b.to_string(),
+                    Value::Char(c) => c.to_string(),
+                    _ => return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Unsupported value type for writing to file '{}'", filename),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    }),
+                    // Value::Array { .. } => format!("{:?}", value), // simple debug output for arrays
+                    // Value::Identifier(id) => id.clone(),
+                    // Value::Function(_) => "<function>".to_string(),
+                };
+                handle.0.write_all(format!("{}\n", output).as_bytes()).map_err(|e| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Failed to write to file '{}': {}", filename, e),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                })?;
+                Ok(())
+            } else {
+                Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("File '{}' is not properly opened", filename),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                })
+            }
+        } else {
+            match &mut self.parent {
+                Some(parent_rc) => parent_rc.borrow_mut().writefile(filename, value),
+                None => Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("File '{}' is not open", filename),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                }),
+            }
+        }
+    }
+
+    pub fn readfile(&mut self, filename: &str) -> Result<String, CPSError> {
+        if let Some(open_file) = self.open_files.get_mut(filename) {
+            if open_file.mode != FileMode::Read {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Cannot read from file '{}': file is not opened in read mode", filename),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                });
+            }
+
+            // buffer lines on first read
+            if open_file.lines.is_none() {
+                use std::io::Read;
+                let mut contents = String::new();
+                if let Some(handle) = &mut open_file.handle {
+                    handle.0.read_to_string(&mut contents).map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to read file '{}': {}", filename, e),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    })?;
+                }
+                open_file.lines = Some(contents.lines().map(|l| l.to_string()).collect());
+            }
+
+            let lines = open_file.lines.as_ref().unwrap();
+            if open_file.line_idx >= lines.len() {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Cannot read past end of file '{}'", filename),
+                    hint: Some("Check EOF before reading".to_string()),
+                    line: 0, column: 0, source: None,
+                });
+            }
+
+            let line = lines[open_file.line_idx].clone();
+            open_file.line_idx += 1;
+            Ok(line)
+        } else {
+            match &mut self.parent {
+                Some(parent_rc) => parent_rc.borrow_mut().readfile(filename),
+                None => Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("File '{}' is not open", filename),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            }
+        }
+    }
+
+    pub fn is_eof(&self, filename: &str) -> Result<bool, CPSError> {
+        if let Some(open_file) = self.open_files.get(filename) {
+            if open_file.mode != FileMode::Read {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("EOF can only be used on files opened in READ mode, '{}' is in {:?} mode", filename, open_file.mode),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                });
+            }
+            let is_eof = match &open_file.lines {
+                Some(lines) => open_file.line_idx >= lines.len(),
+                None => false, // not yet buffered, so not EOF
+            };
+            return Ok(is_eof);
+        }
+        match &self.parent {
+            Some(parent_rc) => parent_rc.borrow().is_eof(filename),
+            None => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("File '{}' is not open", filename),
+                hint: Some("Make sure to open the file before checking EOF".to_string()),
+                line: 0, column: 0, source: None,
+            }),
+        }
+    }
+
+    
+
 
     pub fn get_type(&mut self, name: &str) -> Result<Type, CPSError> {
         if let Some(value) = self.bindings.get(name) {

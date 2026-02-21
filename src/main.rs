@@ -12,7 +12,7 @@ use crate::Parser::parser;
 fn main() {
     let matches = Command::new("cps")
         .author("Faisal Fakih")
-        .version("0.1.3")
+        .version("0.1.4")
         .about("Interpreter for the Cambridge Pseudocode Language")
         .arg(
             Arg::new("file")
@@ -27,6 +27,12 @@ fn main() {
                 .help("Enable verbose output")
                 .action(clap::ArgAction::SetTrue)
         )
+        .arg(Arg::new("parse")
+            .short('p')
+            .long("parse")
+            .help("Only parse the file and print the AST")
+            .action(clap::ArgAction::SetTrue)
+        )
         .get_matches();
 
     // get the file argument
@@ -36,6 +42,7 @@ fn main() {
         .unwrap_or("main.cps");
 
     let verbose = matches.get_flag("verbose");
+    let parse_only = matches.get_flag("parse");
 
     // read from file
     let contents = match fs::read_to_string(filename) {
@@ -68,10 +75,10 @@ fn main() {
     let mut parser_instance = parser::Parser::new(tokens, contents.clone());
     let ast = match parser_instance.parse_statements() {
         Ok(ast) => {
-            if verbose {
+            if verbose || parse_only {
                 println!("\n=== AST ===");
                 for a in &ast {
-                    println!("{:#?}", a);
+                    a.print_prefix();
                 }
             }
             ast
@@ -80,7 +87,11 @@ fn main() {
             eprintln!("{}", e);
             process::exit(1);
         }
-    };
+    }; 
+
+    if parse_only {
+        process::exit(0);
+    }
 
     // interpret
     let mut interpreter = Inter::interpreter::Interpreter::new();

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use crate::Inter::cps::{ArrayType, Type, Value};
 use crate::Lexer::{lexer::Token, lexer::TokenType};
 use crate::errortype::{CPSError, ErrorType};
-use crate::Parser::ast::{BinaryExpr, BlockStmt, CaseCondition, Expr};
+use crate::Parser::ast::{BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode};
 use super::ast::{Ast, Operator, Position, Associativity, Precedence, Stmt};
 
 
@@ -157,17 +157,43 @@ impl Parser {
             TokenType::Identifier => {
                 let name = token.lexeme.clone();
                 self.advance();
-
-                if self.peek(0).token_type == TokenType::LParen { // check if its a function call
+                if name.to_uppercase() == "EOF" && self.peek(0).token_type == TokenType::LParen {
+                    // parse EOF("filename")
+                    self.advance(); // consume '('
+                    let filename_expr = self.parse_expr(0)?;
+                    let filename_str = match ast_to_expr(filename_expr)? {
+                        Expr::Literal(Value::String(s)) => s,
+                        Expr::Literal(Value::Identifier(id)) => id,
+                        _ => return Err(CPSError {
+                            error_type: ErrorType::Syntax,
+                            message: "EOF argument must be a filename".to_string(),
+                            hint: None,
+                            line: token.line,
+                            column: token.column,
+                            source: Some(self.source.clone()),
+                        }),
+                    };
+                    let close = self.advance();
+                    if close.token_type != TokenType::RParen {
+                        return Err(CPSError {
+                            error_type: ErrorType::Syntax,
+                            message: "Expected ')' after EOF argument".to_string(),
+                            hint: None,
+                            line: close.line,
+                            column: close.column,
+                            source: Some(self.source.clone()),
+                        });
+                    }
+                    return Ok(Ast::Expression(Expr::EOF { filename: filename_str }));
+                } else if self.peek(0).token_type == TokenType::LParen {
                     self.parse_function_call_expr(name)
-                } else if self.peek(0).token_type == TokenType::LSquare { // array access
+                } else if self.peek(0).token_type == TokenType::LSquare {
                     self.parse_array_access_expr(name)
-                }
-                else {
+                } else {
                     Ok(Ast::Identifier(name))
                 }
-
             }
+
             TokenType::LParen => {
                 self.advance();
                 let expr = self.parse_expr(0)?;
@@ -389,9 +415,13 @@ impl Parser {
             TokenType::Function => self.parse_function().map_err(|e| (e, false)),
             TokenType::Return => self.parse_return().map_err(|e| (e, false)),
             TokenType::Call => self.parse_call().map_err(|e| (e, false)),
+            TokenType::OpenFile => self.parse_open_file().map_err(|e| (e, false)),
+            TokenType::WriteFile => self.parse_writefile().map_err(|e| (e, false)),
+            TokenType::ReadFile => self.parse_readfile().map_err(|e| (e, false)),
             // terminate if it leaves the scope
             TokenType::Eof | TokenType::EndIf | TokenType::EndCase | TokenType::EndType | 
                 TokenType::Else | TokenType::Next | TokenType::Until | TokenType::EndClass | 
+                TokenType::CloseFile |  
                 TokenType::EndWhile | TokenType::EndFunction | TokenType::EndProcedure => {
                     Err((CPSError {
                         error_type: ErrorType::Syntax,
@@ -1480,9 +1510,117 @@ impl Parser {
         }))
     }
 
+    fn parse_open_file(&mut self) -> Result<Ast, CPSError> {
+        let open_token = self.advance(); // consume 'open'
+        let filename_expr = self.parse_expr(0)?;
+        let for_token = self.advance();
+        if for_token.token_type != TokenType::For {
+            return Err(CPSError {
+                error_type: ErrorType::Syntax,
+                message: "Expected 'FOR' after filename in OPEN statement".to_string(),
+                hint: Some("OPEN statement must specify the mode using 'FOR'".to_string()),
+                line: for_token.line,
+                column: for_token.column,
+                source: Some(self.source.clone()),
+            });
+        }
 
+        let mode_token = self.advance();
+        let mode;
+        match mode_token.token_type {
+            TokenType::Read => mode = FileMode::Read,
+            TokenType::Write => mode = FileMode::Write, 
+            TokenType::Append => mode = FileMode::Append,
+            _ => return Err(CPSError {
+                error_type: ErrorType::Syntax,
+                message: "Expected a valid file mode (READ, WRITE, APPEND) in OPEN statement".to_string(),
+                hint: None,
+                line: mode_token.line,
+                column: mode_token.column,
+                source: Some(self.source.clone()),
+            }),
+        };
+        let stmts = self.parse_statements()?;
 
+        let close_token = self.advance();
+        if close_token.token_type != TokenType::CloseFile {
+            return Err(CPSError {
+                error_type: ErrorType::Syntax,
+                message: "Expected 'CLOSEFILE' after OPENFILE statement body".to_string(),
+                hint: Some("OPENFILE statement must be closed with 'CLOSEFILE'".to_string()),
+                line: close_token.line,
+                column: close_token.column,
+                source: Some(self.source.clone()),
+            });
+        }
 
+        let body_statements: Result<Vec<Stmt>, CPSError> = stmts.into_iter().map(|a| match a {
+            Ast::Stmt(s) => Ok(s),
+            _ => Err(CPSError {
+                error_type: ErrorType::Syntax,
+                message: "Expected statement in openfile body".to_string(),
+                hint: Some("OPENFILE statement body must contain valid statements".to_string()),
+                line: open_token.line,
+                column: open_token.column,
+                source: Some(self.source.clone()),
+            }),
+        }).collect();
+
+        // expect expression after closefile
+        let filename_after_close = self.parse_expr(0)?;
+
+        return Ok(Ast::Stmt(Stmt::OpenFile {
+            filename: Box::new(ast_to_expr(filename_expr)?),
+            mode,
+            stmts: BlockStmt {
+                statements: body_statements?,
+            },
+            close_expr: Box::new(ast_to_expr(filename_after_close)?),
+        }) );
+    }
+
+    fn parse_writefile(&mut self) -> Result<Ast, CPSError> {
+        let _ = self.advance();
+        let filename_expr = self.parse_expr(0)?;
+        let comma = self.advance();
+        if comma.token_type != TokenType::Comma {
+            return Err(CPSError {
+                error_type: ErrorType::Syntax,
+                message: "Expected ',' after filename in WRITEFILE statement".to_string(),
+                hint: Some("WRITEFILE statement must specify the content expression after the filename, separated by a comma".to_string()),
+                line: comma.line,
+                column: comma.column,
+                source: Some(self.source.clone()),
+            });
+        }
+        let expr = self.parse_expr(0)?;
+
+        return Ok(Ast::Stmt(Stmt::WriteFile {
+            filename: Box::new(ast_to_expr(filename_expr)?),
+            value: Box::new(ast_to_expr(expr)?),
+        }) );
+    }
+
+    fn parse_readfile(&mut self) -> Result<Ast, CPSError> {
+        let _ = self.advance();
+        let filename_expr = self.parse_expr(0)?;
+        let comma = self.advance();
+        if comma.token_type != TokenType::Comma {
+            return Err(CPSError {
+                error_type: ErrorType::Syntax,
+                message: "Expected ',' after filename in READFILE statement".to_string(),
+                hint: Some("READFILE statement must specify the content expression after the filename, separated by a comma".to_string()),
+                line: comma.line,
+                column: comma.column,
+                source: Some(self.source.clone()),
+            });
+        }
+        let target_expr = self.parse_expr(0)?;
+        return Ok(Ast::Stmt(Stmt::ReadFile {
+            filename: Box::new(ast_to_expr(filename_expr)?),
+            target: Box::new(ast_to_expr(target_expr)?),
+        }));
+    }
 }
 
 

@@ -31,7 +31,6 @@ pub enum TokenType {
     EndProcedure,
     EndType,
     EndWhile,
-    Eof,
     False,
     For,
     To,
@@ -98,8 +97,9 @@ pub enum TokenType {
     RParen,
     LSquare,
     RSquare,
-
     Comma,
+
+    Eof,
 }
 
 
@@ -164,7 +164,6 @@ impl Lexer {
             ("ENDPROCEDURE".to_string(), TokenType::EndProcedure),
             ("ENDTYPE".to_string(), TokenType::EndType),
             ("ENDWHILE".to_string(), TokenType::EndWhile),
-            ("EOF".to_string(), TokenType::Eof),
             ("FALSE".to_string(), TokenType::False),
             ("FOR".to_string(), TokenType::For),
             ("FUNCTION".to_string(), TokenType::Function),
