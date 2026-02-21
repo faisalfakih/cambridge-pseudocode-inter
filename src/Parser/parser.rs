@@ -1065,8 +1065,7 @@ impl Parser {
         match value {
             Ok(v) => Ok(Ast::Stmt(Stmt::Constant { identifier: identifier.lexeme, value: v })),
             Err(_) => Err(CPSError { error_type: ErrorType::Syntax, 
-                message: "Expected a literal value for constant declaration".to_string(), hint: Some("Only literals can be used as the value of a constant. A variable, another constant or an expression must never
-be used.".to_string()), 
+                message: "Expected a literal value for constant declaration".to_string(), hint: Some("Only literals can be used as the value of a constant. A variable, another constant or an expression must never be used.".to_string()), 
                 line: identifier.line, column: identifier.column, source: Some(self.source.clone()) }),
         }
 
