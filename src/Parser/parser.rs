@@ -12,6 +12,7 @@ pub struct Parser {
     position: usize,
     operators: HashMap<TokenType, Operator>,
     source: String,
+    scope: u32, // track the current scope level to prevent invalid terminators in the global scope
 }
 
 impl Parser {
@@ -38,7 +39,7 @@ impl Parser {
             (TokenType::Ampersand, Operator { precedence: 8, position: Position::Infix, associativity: Associativity::Left})
         ].iter().cloned().collect();
 
-        Parser { tokens, position: 0, operators, source }
+        Parser { tokens, position: 0, operators, source, scope: 0 }
     }
 
 
@@ -420,10 +421,20 @@ impl Parser {
             TokenType::WriteFile => self.parse_writefile().map_err(|e| (e, false)),
             TokenType::ReadFile => self.parse_readfile().map_err(|e| (e, false)),
             // terminate if it leaves the scope
-            TokenType::Eof | TokenType::EndIf | TokenType::EndCase | TokenType::EndType | 
+            TokenType::Eof | TokenType::EndIf | TokenType::EndCase | TokenType::EndType |  
                 TokenType::Else | TokenType::Next | TokenType::Until | TokenType::EndClass | 
                 TokenType::CloseFile |  
                 TokenType::EndWhile | TokenType::EndFunction | TokenType::EndProcedure => {
+                    if self.scope == 0 && token.token_type != TokenType::Eof {
+                        return Err((CPSError {
+                            error_type: ErrorType::Syntax,
+                            message: format!("Unexpected token: {}" , token.lexeme),
+                            hint: Some("You are trying to terminate a code block in the global scope.".to_string()),
+                            line: token.line,
+                            column: token.column,
+                            source: Some(self.source.clone()),
+                        }, false));
+                    }
                     Err((CPSError {
                         error_type: ErrorType::Syntax,
                         message: "Loop terminator".to_string(),
@@ -524,6 +535,8 @@ impl Parser {
     fn parse_if_statement(&mut self) -> Result<Ast, CPSError> {
         let if_token = self.advance(); // consume 'if'
         let condition = self.parse_expr(0)?;
+
+        self.scope += 1; // enter the scope of the if statement
         
         // consume the 'THEN'
         let then = self.peek(0);
@@ -605,6 +618,8 @@ impl Parser {
             }).collect()
         });
 
+        self.scope -= 1; // decrease scope after parsing if statement
+
         Ok(Ast::Stmt(Stmt::If {
             condition: Box::new(condition_expr),
             then_branch: BlockStmt { 
@@ -636,6 +651,8 @@ impl Parser {
         let identifier = self.parse_expr(0)?;
         let identifier_expr = ast_to_expr(identifier)?;
 
+        self.scope += 1; // enter the scope of the case statement
+
         let mut cases: Vec<(CaseCondition, BlockStmt)> = Vec::new();
         let mut otherwise: Option<BlockStmt> = None;
 
@@ -644,6 +661,7 @@ impl Parser {
 
             if token.token_type == TokenType::EndCase {
                 self.advance(); // consume 'endcase'
+                self.scope -= 1; // decrease scope after parsing case statement
                 break;
             }
 
@@ -778,6 +796,8 @@ impl Parser {
         let while_token = self.advance(); // consume 'while'
         let condition = self.parse_expr(0)?;
 
+        self.scope += 1; // enter the scope of the while loop
+
         let body_statements = self.parse_statements()?;
 
         // consume endwhile
@@ -793,6 +813,7 @@ impl Parser {
             });
         }
         self.advance(); // consume 'endwhile'
+        self.scope -= 1; // decrease scope after parsing while statement
 
         // Convert condition to Expr
         let condition_expr = match condition {
@@ -832,6 +853,7 @@ impl Parser {
 
     fn parse_repeat_statement(&mut self) -> Result<Ast, CPSError> {
         let repeat_token = self.advance(); // consume 'repeat'
+        self.scope += 1;
         // parse block statements after
         let stmts = self.parse_statements()?;
 
@@ -846,6 +868,7 @@ impl Parser {
                 source: Some(self.source.clone()),
             });
         }
+        self.scope -= 1; 
 
         let condition = self.parse_expr(0)?;
         let body_statements: Result<Vec<Stmt>, CPSError> = stmts.into_iter().map(|a| match a {
@@ -954,6 +977,8 @@ impl Parser {
             }
         };
 
+        self.scope += 1; // enter the scope of the for loop
+
         let body_statements = self.parse_statements()?;
 
         let body_statements: Result<Vec<Stmt>, CPSError> = body_statements.into_iter().map(|a| match a {
@@ -982,6 +1007,9 @@ impl Parser {
                 source: Some(self.source.clone()),
             })
         }
+
+        self.scope -= 1; // decrease scope after parsing for loop
+
         let iden = self.advance(); // consume identifier after NEXT
         if iden.token_type != TokenType::Identifier {
             return Err(CPSError{
@@ -1216,6 +1244,8 @@ impl Parser {
             });
         }
 
+        self.scope += 1;
+
         let body_statements = self.parse_statements()?;
         let body_statements: Result<Vec<Stmt>, CPSError> = body_statements.into_iter().map(|a| match a {
             Ast::Stmt(s) => Ok(s),
@@ -1240,6 +1270,7 @@ impl Parser {
                 source: Some(self.source.clone()),
             });
         }
+        self.scope -= 1;
 
         Ok(Ast::Stmt(Stmt::Procedure {
             name: identifier_token.lexeme,
@@ -1376,6 +1407,8 @@ impl Parser {
             }
         };
 
+        self.scope += 1;
+
         let body_statements = self.parse_statements()?;
         let body_statements: Result<Vec<Stmt>, CPSError> = body_statements.into_iter().map(|a| match a {
             Ast::Stmt(s) => Ok(s),
@@ -1400,6 +1433,8 @@ impl Parser {
                 source: Some(self.source.clone()),
             });
         }
+
+        self.scope -= 1;
 
         Ok(Ast::Stmt(Stmt::Function {
             name: identifier_token.lexeme,
@@ -1617,6 +1652,9 @@ impl Parser {
                 source: Some(self.source.clone()),
             }),
         };
+
+        self.scope += 1;
+
         let stmts = self.parse_statements()?;
 
         let close_token = self.advance();
@@ -1630,6 +1668,8 @@ impl Parser {
                 source: Some(self.source.clone()),
             });
         }
+
+        self.scope -= 1;
 
         let body_statements: Result<Vec<Stmt>, CPSError> = stmts.into_iter().map(|a| match a {
             Ast::Stmt(s) => Ok(s),
