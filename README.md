@@ -41,14 +41,23 @@ winget install MSYS2.MSYS2
 pacman -S --needed base-devel mingw-w64-x86_64-toolchain
 ```
 
-#### Step 6: Add MinGW to PATH
+#### Step 6: Open PowerShell/Terminal and add mingw64\bin to PATH (this is required for Rust to find the C compiler): 
 ```bash
-msys_path=$(find /c -maxdepth 4 -type d \( -iname msys64 -o -iname msys32 \) 2>/dev/null | head -n1); [ -z "$msys_path" ] && { echo "❌ MSYS2 not found"; exit 1; }; mingw_bin="$msys_path/mingw64/bin"; [ ! -d "$mingw_bin" ] && { echo "❌ mingw64/bin missing"; exit 1; }; win_path=$(echo "$mingw_bin" | sed 's|^/\([a-zA-Z]\)/|\1:/|' | sed 's|/|\\|g'); echo "Adding $win_path to PATH"; powershell.exe -Command "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$win_path', 'User')"; echo "✅ Done"
+$msysPath = @("C:\msys64", "C:\msys32") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $msysPath) { Write-Error "❌ MSYS2 not found"; exit 1 }
+$mingwBin = "$msysPath\mingw64\bin"
+if (-not (Test-Path $mingwBin)) { Write-Error "❌ mingw64\bin missing"; exit 1 }
+$currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', "$currentPath;$mingwBin", 'User')
+Write-Host "✅ Done — added $mingwBin"
 ```
 
 #### Step 7: Add Cargo to PATH
 ```bash
-cargo_bin="$HOME/.cargo/bin"; win_path=$(echo "$cargo_bin" | sed 's|^/\([a-zA-Z]\)/|\1:/|' | sed 's|/|\\|g'); echo "Adding $win_path to PATH"; powershell.exe -Command "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$win_path', 'User')"; echo "✅ Done — restart your terminal"
+$cargoBin = "$env:USERPROFILE\.cargo\bin"
+$currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', "$currentPath;$cargoBin", 'User')
+Write-Host "✅ Done — restart your terminal"
 ```
 
 #### Step 8: Close and reopen PowerShell/Terminal and try installing CPS again:
