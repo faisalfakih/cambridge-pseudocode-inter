@@ -459,8 +459,8 @@ impl Lexer {
                 // closing quote found
                 self.position += 1;
                 self.column += 1;
-                // check if lexeme is a single character
-                if lexeme.chars().count() != 1 {
+                // check if lexeme is a single character or 0 character (empty char literal)
+                if lexeme.chars().count() > 1 {
                     return Err(CPSError {
                         error_type: ErrorType::Lexical,
                         message: "Character literals must be a single character".to_string(),
