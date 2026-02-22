@@ -891,17 +891,6 @@ impl Interpreter {
                 Ok(())
 
 
-                // self.current_env
-                //     .borrow_mut()
-                //     .set_array_element(&name, index_int as usize, col_usize, Value::String(input))
-                //     .map_err(|e| CPSError {
-                //         error_type: ErrorType::Runtime,
-                //         message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
-                //         hint: None,
-                //         line: 0,
-                //         column: 0,
-                //         source: None,
-                //     })
             }
             _ => {
                 return Err(CPSError {
