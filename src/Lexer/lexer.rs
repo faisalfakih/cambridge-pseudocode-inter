@@ -363,6 +363,9 @@ impl Lexer {
                 '"' => {
                     return self.handle_string_literal();
                 },
+                '\'' => {
+                    return self.handle_char_literal();
+                }
                 ':' => {
                     self.position += 1;
                     self.column += 1;
@@ -436,6 +439,50 @@ impl Lexer {
             error_type: ErrorType::Lexical,
             message: "Your string was not closed!".to_string(),
             hint: Some("Make sure to close your string with a \"".to_string()),
+            line: start_line,
+            column: start_column,
+            source: Some(self.source.clone()),
+        })
+    }
+
+    fn handle_char_literal(&mut self) -> Result<Token, CPSError> {
+        let start_line = self.line;
+        let start_column = self.column;
+        let mut lexeme = String::new();
+
+        // consume the opening quote
+        self.position += 1;
+        self.column += 1;
+
+        while let Some(c) = self.peek(0) {
+            if c == '\'' {
+                // closing quote found
+                self.position += 1;
+                self.column += 1;
+                // check if lexeme is a single character
+                if lexeme.chars().count() != 1 {
+                    return Err(CPSError {
+                        error_type: ErrorType::Lexical,
+                        message: "Character literals must be a single character".to_string(),
+                        hint: None,
+                        line: start_line,
+                        column: start_column,
+                        source: Some(self.source.clone()),
+                    });
+                }
+                return Ok(Token::new(lexeme, TokenType::CharLiteral, start_line, start_column));
+            } else {
+                lexeme.push(c);
+                self.position += 1;
+                self.column += 1;
+            }
+        }
+
+        // if we reach here, the char literal was not closed
+        Err(CPSError {
+            error_type: ErrorType::Lexical,
+            message: "Your character literal was not closed!".to_string(),
+            hint: Some("Make sure to close your character literal with a '".to_string()),
             line: start_line,
             column: start_column,
             source: Some(self.source.clone()),
