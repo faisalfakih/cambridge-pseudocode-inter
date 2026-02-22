@@ -546,21 +546,128 @@ impl Interpreter {
         io::stdin().read_line(&mut input).unwrap();
         let input = input.trim().to_string();
 
-        match *identifier.clone() {
+        match identifier.as_ref() {
             Expr::Literal(name) => {
                 match name {
                     Value::Identifier(ref iden) => {
-                        self.current_env // all inputs r treated as strings
-                            .borrow_mut()
-                            .set(iden, Value::String(input))
-                            .map_err(|e| CPSError {
-                                error_type: ErrorType::Runtime,
-                                message: format!("Failed to assign input to '{}': {}", iden, e.message),
-                                hint: None,
-                                line: 0,
-                                column: 0,
-                                source: None,
-                            })
+                        // get the type of the identifier
+                        
+                        let type_ = self.current_env.borrow_mut().get_type(&iden)?;
+                        match type_ {
+                            Type::Integer => {
+                                let int_value: i64 = input.parse().map_err(|_| CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Expected an integer for variable '{}', got: {}", iden, input),
+                                    hint: None,
+                                    line: 0,
+                                    column: 0,
+                                    source: None,
+                                })?;
+                                self.current_env.borrow_mut()
+                                    .set(iden, Value::Integer(int_value))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::Real => {
+                                let real_value: f64 = input.parse().map_err(|_| CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Expected a real number for variable '{}', got: {}", iden, input),
+                                    hint: None,
+                                    line: 0,
+                                    column: 0,
+                                    source: None,
+                                })?;
+                                self.current_env.borrow_mut()
+                                    .set(iden, Value::Real(real_value))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::Boolean => {
+                                let input_lower = input.to_lowercase();
+                                let bool_value = match input_lower.as_str() {
+                                    "true" => true,
+                                    "false" => false,
+                                    _ => {
+                                        return Err(CPSError {
+                                            error_type: ErrorType::Runtime,
+                                            message: format!("Expected 'true' or 'false' for variable '{}', got: {}", iden, input),
+                                            hint: None,
+                                            line: 0,
+                                            column: 0,
+                                            source: None,
+                                        });
+                                    }
+                                };
+                                self.current_env.borrow_mut()
+                                    .set(iden, Value::Boolean(bool_value))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::Char => {
+                                if input.chars().count() != 1 {
+                                    return Err(CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Expected a single character for variable '{}', got: {}", iden, input),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    });
+                                }
+                                self.current_env.borrow_mut()
+                                    .set(iden, Value::Char(input.chars().next().unwrap()))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::String => {
+                                // no validation needed for string
+                                self.current_env.borrow_mut()
+                                    .set(iden, Value::String(input))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            _ => {
+                                return Err(CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Unsupported variable type for INPUT: {:?}", type_),
+                                    hint: None,
+                                    line: 0,
+                                    column: 0,
+                                    source: None,
+                                });
+                            }
+                        }
+
                     }
                     _ => {
                         return Err(CPSError {
@@ -572,7 +679,8 @@ impl Interpreter {
                             source: None,
                         });
                     }
-                }
+                } 
+                Ok(())
             } 
             Expr::ArrayAccess { name, index, col } => {
                 let index_value = self.evaluate_expr(&index)?;
@@ -651,18 +759,149 @@ impl Interpreter {
                     None => None,
                 };
 
+                let type_ = self.current_env.borrow_mut().get_type(&name)?;
+                match type_ {
+                    Type::Array(arr_type) => {
+                        let base_type = &arr_type.base_type;
+                        match **base_type {
+                            Type::Integer => {
+                                let int_value: i64 = input.parse().map_err(|_| CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Expected an integer for array element '{}[{}]', got: {}", name, index_int, input),
+                                    hint: None,
+                                    line: 0,
+                                    column: 0,
+                                    source: None,
+                                })?;
+                                self.current_env.borrow_mut()
+                                    .set_array_element(&name, index_int as usize, col_usize, Value::Integer(int_value))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::Real => {
+                                let real_value: f64 = input.parse().map_err(|_| CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Expected a real number for array element '{}[{}]', got: {}", name, index_int, input),
+                                    hint: None,
+                                    line: 0,
+                                    column: 0,
+                                    source: None,
+                                })?;
+                                self.current_env.borrow_mut()
+                                    .set_array_element(&name, index_int as usize, col_usize, Value::Real(real_value))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::String => {
+                                self.current_env.borrow_mut()
+                                    .set_array_element(&name, index_int as usize, col_usize, Value::String(input))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::Boolean => {
+                                let input_lower = input.to_lowercase();
+                                let bool_value = match input_lower.as_str() {
+                                    "true" => true,
+                                    "false" => false,
+                                    _ => {
+                                        return Err(CPSError {
+                                            error_type: ErrorType::Runtime,
+                                            message: format!("Expected 'true' or 'false' for array element '{}[{}]', got: {}", name, index_int, input),
+                                            hint: None,
+                                            line: 0,
+                                            column: 0,
+                                            source: None,
+                                        });
+                                    }
+                                };
+                                self.current_env.borrow_mut()
+                                    .set_array_element(&name, index_int as usize, col_usize, Value::Boolean(bool_value))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            Type::Char => {
+                                if input.chars().count() != 1 {
+                                    return Err(CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Expected a single character for array element '{}[{}]', got: {}", name, index_int, input),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    });
+                                }
+                                self.current_env.borrow_mut()
+                                    .set_array_element(&name, index_int as usize, col_usize, Value::Char(input.chars().next().unwrap()))
+                                    .map_err(|e| CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
+                                        hint: None,
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    })?;
+                            }
+                            _ => {
+                                return Err(CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Unsupported array base type for INPUT: {:?}", base_type),
+                                    hint: None,
+                                    line: 0,
+                                    column: 0,
+                                    source: None,
+                                });
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Identifier '{}' is not an array for INPUT statement", name),
+                            hint: None,
+                            line: 0,
+                            column: 0,
+                            source: None,
+                        });
+                    }
+                }
+                Ok(())
 
-                self.current_env
-                    .borrow_mut()
-                    .set_array_element(&name, index_int as usize, col_usize, Value::String(input))
-                    .map_err(|e| CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
-                        hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
-                    })
+
+                // self.current_env
+                //     .borrow_mut()
+                //     .set_array_element(&name, index_int as usize, col_usize, Value::String(input))
+                //     .map_err(|e| CPSError {
+                //         error_type: ErrorType::Runtime,
+                //         message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
+                //         hint: None,
+                //         line: 0,
+                //         column: 0,
+                //         source: None,
+                //     })
             }
             _ => {
                 return Err(CPSError {
