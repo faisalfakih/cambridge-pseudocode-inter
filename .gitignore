@@ -27,6 +27,8 @@ target
 
 # anything ending with .sh
 *.sh
+# dont ignore install.sh
+!install.sh 
 
 # ignore main pseudocode file
 main.cps

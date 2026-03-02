@@ -1,70 +1,22 @@
 # Cambridge Pseudocode Interpreter
 
+![Downloads](https://img.shields.io/github/downloads/faisalfakih/cambridge-psudocode-inter/total)
+![Version](https://img.shields.io/github/v/release/faisalfakih/cambridge-psudocode-inter)
+![License](https://img.shields.io/github/license/faisalfakih/cambridge-psudocode-inter)
+
 A Rust-based interpreter for Cambridge International AS & A Level Computer Science (9618) pseudocode specification. This project implements a complete interpreter capable of parsing and executing pseudocode according to the Cambridge syllabus standards.
 
 ## 📦 Installation
 
-### Quick Install:
-
-<!-- > **Don't have Rust?** Install it from [here](https://rust-lang.org/tools/install/). -->
-
 ### Linux/macOS
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Install Rust
-cargo install cambridge-pseudocode-interpreter                   # Then install the CPS interpreter
+curl -s https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install.sh | bash
 ```
 
-### Windows:
-
-#### Step 1: Install Rust (PowerShell or CMD)
-```bash
-winget install Rustlang.Rust.GNU
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install.ps1 | iex
 ```
-
-#### Step 2: Close and reopen PowerShell/Terminal
-(This loads Rust into PATH)
-
-#### Step 3: Now install CPS
-```bash
-cargo install cambridge-pseudocode-interpreter
-```
-
-#### If this raises an error, then try:
-#### Step 4: Install MSYS2 
-```bash
-winget install MSYS2.MSYS2
-```
-
-#### Step 5: Open MSYS2 terminal and run:
-> NOTE: To paste this command into the MSYS2 terminal right-click and select "Paste" as Ctrl+V doesn't work in MSYS2
-```bash
-pacman -S --needed base-devel mingw-w64-x86_64-toolchain
-```
-
-#### Step 6: Open PowerShell/Terminal and add mingw64\bin to PATH (this is required for Rust to find the C compiler): 
-```bash
-$msysPath = @("C:\msys64", "C:\msys32") | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $msysPath) { Write-Error "❌ MSYS2 not found"; exit 1 }
-$mingwBin = "$msysPath\mingw64\bin"
-if (-not (Test-Path $mingwBin)) { Write-Error "❌ mingw64\bin missing"; exit 1 }
-$currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-[Environment]::SetEnvironmentVariable('Path', "$currentPath;$mingwBin", 'User')
-Write-Host "✅ Done — added $mingwBin"
-```
-
-#### Step 7: Add Cargo to PATH
-```bash
-$cargoBin = "$env:USERPROFILE\.cargo\bin"
-$currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-[Environment]::SetEnvironmentVariable('Path', "$currentPath;$cargoBin", 'User')
-Write-Host "✅ Done — restart your terminal"
-```
-
-#### Step 8: Close and reopen PowerShell/Terminal and try installing CPS again:
-```bash
-cargo install cambridge-pseudocode-interpreter
-```
-
 
 After installation, the `cps` command will be available globally:
 
@@ -72,10 +24,16 @@ After installation, the `cps` command will be available globally:
 cps --version
 cps --help
 ```
----
-### To update CPS, run
+
+### To update CPS
+Simply run the install script again — it will always pull the latest release.
+
+### Build from source
 ```bash
-cargo install cambridge-pseudocode-interpreter --force
+git clone https://github.com/faisalfakih/cambridge-psudocode-inter
+cd cambridge-psudocode-inter
+cargo build --release
+./target/release/cps yourfile.cps
 ```
 
 
