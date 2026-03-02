@@ -1,6 +1,6 @@
 # Cambridge Pseudocode Interpreter
 
-![Downloads](https://img.shields.io/github/downloads/faisalfakih/cambridge-psudocode-inter/total)
+![Stars](https://img.shields.io/github/stars/faisalfakih/cambridge-psudocode-inter)
 ![Version](https://img.shields.io/github/v/release/faisalfakih/cambridge-psudocode-inter)
 ![License](https://img.shields.io/github/license/faisalfakih/cambridge-psudocode-inter)
 
@@ -10,12 +10,12 @@ A Rust-based interpreter for Cambridge International AS & A Level Computer Scien
 
 ### Linux/macOS
 ```bash
-curl -s https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install.sh | bash
+curl -s https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 ```powershell
-irm https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install/install.ps1 | iex
 ```
 
 After installation, the `cps` command will be available globally:
