@@ -337,10 +337,10 @@ The interpreter implements a strict type system with runtime type checking:
 - Functions and procedures
 - All loop types (FOR, WHILE, REPEAT)
 - CASE statements with ranges
-
-### 🚧 In Progress
 - 2D array support
 - File I/O operations
+
+### 🚧 In Progress
 - User-defined types
 
 ### 📋 Planned
