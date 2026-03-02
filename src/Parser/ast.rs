@@ -81,7 +81,8 @@ pub enum Stmt {
     },
     Return { value: Box<Expr> },
     Call { name: String, arguments: Vec<Expr> }, 
-    OpenFile { filename: Box<Expr>, mode: FileMode, stmts: BlockStmt, close_expr: Box<Expr> },
+    OpenFile { filename: Box<Expr>, mode: FileMode },
+    CloseFile { filename: Box<Expr> },
     ReadFile { filename: Box<Expr>, target: Box<Expr> },
     WriteFile { filename: Box<Expr>, value: Box<Expr> },
 }
@@ -306,19 +307,16 @@ impl Stmt {
             Stmt::Return { value } => {
                 format!("{}RETURN {:?}", indent_str, *value)
             }
-            Stmt::OpenFile { filename, mode, stmts, close_expr } => {
+            Stmt::OpenFile { filename, mode } => {
                 let mode_str = match mode {
                     FileMode::Read => "READ",
                     FileMode::Write => "WRITE",
                     FileMode::Append => "APPEND",
                 };
-                let mut result = format!("{}OPENFILE {} MODE {}\n", indent_str, filename.to_prefix(), mode_str);
-                for stmt in &stmts.statements {
-                    result.push_str(&stmt.to_prefix(indent + 1));
-                    result.push('\n');
-                }
-                result.push_str(&format!("{}CLOSEFILE {}", indent_str, close_expr.to_prefix()));
-                result
+                format!("{}OPENFILE {} MODE {}", indent_str, filename.to_prefix(), mode_str)
+            }
+            Stmt::CloseFile { filename } => {
+                format!("{}CLOSEFILE {}", indent_str, filename.to_prefix())
             }
             Stmt::ReadFile { filename, target } => {
                 format!("{}READFILE {} INTO {}", indent_str, filename.to_prefix(), target.to_prefix())
