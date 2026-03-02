@@ -100,7 +100,8 @@ impl Interpreter {
                 Ok(())
             }
             Stmt::For { identifier, start, end, body } => self.evaluate_for(identifier, start, end, body),
-            Stmt::OpenFile { filename, mode, stmts, close_expr } => self.evaluate_open_file(filename, mode, stmts, close_expr),
+            Stmt::OpenFile { filename, mode  } => self.evaluate_open_file(filename, mode),
+            Stmt::CloseFile { filename } => self.evaluate_close_file(filename),
             Stmt::WriteFile { filename, value } => self.evaluate_write_file(filename, value),
             Stmt::ReadFile { filename, target } => self.evaluate_read_file(filename, target),
             Stmt::Return { value } => {
@@ -1075,7 +1076,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn evaluate_open_file(&mut self, filename: &Box<Expr>, mode: &FileMode, stmts: &BlockStmt, close_expr: &Box<Expr>) -> Result<(), CPSError> {
+    fn evaluate_open_file(&mut self, filename: &Box<Expr>, mode: &FileMode) -> Result<(), CPSError> {
         let filename_value = self.evaluate_expr(filename)?;
         let filename_str;
         match &filename_value {
@@ -1093,38 +1094,28 @@ impl Interpreter {
         }
 
         self.current_env.borrow_mut().openfile(&filename_str, mode)?;
+        Ok(())
 
-        for stmt in &stmts.statements {
-            self.evaluate_stmt(stmt)?;
-        }
+    }
 
-        // close the file
-        let close_value = self.evaluate_expr(close_expr)?;
-        let close_str = match &close_value {
-            Value::String(s) => s,
+    fn evaluate_close_file(&mut self, filename: &Box<Expr>) -> Result<(), CPSError> {
+        let filename_value = self.evaluate_expr(filename)?;
+        let filename_str;
+        match &filename_value {
+            Value::String(str) => filename_str = str,
             _ => {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
-                    message: format!("CLOSEFILE expression must evaluate to a string, got: {:?}", close_value),
+                    message: format!("Filename in CLOSEFILE statement must evaluate to a string, got: {:?}", filename_value),
                     hint: None,
                     line: 0,
                     column: 0,
                     source: None,
                 });
             }
-        };
-        if filename_str != close_str {
-            return Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("CLOSEFILE filename '{}' does not match OPENFILE filename '{}'", close_str, filename_str),
-                hint: Some("CLOSEFILE must reference the same file as OPENFILE".to_string()),
-                line: 0, column: 0, source: None,
-            });
         }
-        self.current_env.borrow_mut().closefile(&filename_str, mode)?;
 
-        Ok(())
-
+        self.current_env.borrow_mut().closefile(&filename_str)
     }
 
     fn evaluate_write_file(&mut self, filename: &Box<Expr>, value: &Box<Expr>) -> Result<(), CPSError> {

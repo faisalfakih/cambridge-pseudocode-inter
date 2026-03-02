@@ -44,11 +44,6 @@ pub enum Value {
     // Null,  
 }
 
-pub enum FunctionType {
-    UserDefined(Function),
-    Builtin(BuiltinFunction),
-}
-
 
 #[derive(Debug)]
 pub struct CloneableFile(File);
@@ -70,13 +65,6 @@ pub struct OpenFile {
 }
 
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct BuiltinFunction {
-    pub name: String,
-    pub parameters: Vec<(String, Type)>,
-    pub return_type: Option<Type>,
-    pub implementation: fn(Vec<Value>) -> Result<Option<Value>, CPSError>,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Function {
@@ -323,33 +311,17 @@ impl Environment {
         }
     }
 
-    pub fn is_file_open_conflicting(&self, name: &str, requested_mode: &FileMode) -> bool {
-        if let Some(open_file) = self.open_files.get(name) {
-            return match (&open_file.mode, requested_mode) {
-                (FileMode::Read, FileMode::Read) => true,   // can't open twice for read
-                (FileMode::Write, FileMode::Append) => true, // conflicting
-                (FileMode::Append, FileMode::Write) => true, // conflicting
-                (FileMode::Write, FileMode::Write) => true,  // same mode, conflict
-                (FileMode::Append, FileMode::Append) => true, // same mode, conflict
-                _ => false,
-            };
-        }
-        match &self.parent {
-            Some(parent_rc) => parent_rc.borrow().is_file_open_conflicting(name, requested_mode),
-            None => false,
-        }
-    }
 
-    pub fn closefile(&mut self, name: &str, mode: &FileMode) -> Result<(), CPSError> {
+    pub fn closefile(&mut self, name: &str) -> Result<(), CPSError> {
         if let Some(open_file) = self.open_files.get_mut(name) {
-            if &open_file.mode != mode {
-                return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Cannot close file '{}': opened in {:?} mode but attempting to close in {:?} mode", name, open_file.mode, mode),
-                    hint: None,
-                    line: 0, column: 0, source: None,
-                });
-            }
+            // if &open_file.mode != mode {
+            //     return Err(CPSError {
+            //         error_type: ErrorType::Runtime,
+            //         message: format!("Cannot close file '{}': opened in {:?} mode but attempting to close in {:?} mode", name, open_file.mode, mode),
+            //         hint: None,
+            //         line: 0, column: 0, source: None,
+            //     });
+            // }
             // flush before closing
             if let Some(handle) = &mut open_file.handle {
                 use std::io::Write;
@@ -364,7 +336,7 @@ impl Environment {
             return Ok(());
         }
         match &mut self.parent {
-            Some(parent_rc) => parent_rc.borrow_mut().closefile(name, mode),
+            Some(parent_rc) => parent_rc.borrow_mut().closefile(name),
             None => Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Cannot close file '{}': file is not open", name),
@@ -374,6 +346,15 @@ impl Environment {
         }
     }
 
+    pub fn is_file_open_conflicting(&self, name: &str, requested_mode: &FileMode) -> bool {
+        if let Some(_) = self.open_files.get(name) { // can't open the same file twice
+            return true;
+        }
+        match &self.parent {
+            Some(parent_rc) => parent_rc.borrow().is_file_open_conflicting(name, requested_mode),
+            None => false,
+        }
+    }
 
     pub fn openfile(&mut self, name: &str, mode: &FileMode) -> Result<(), CPSError> {
         if self.is_file_open_conflicting(name, mode) {
@@ -420,18 +401,34 @@ impl Environment {
                 CloneableFile(f)
             }
             FileMode::Read => {
-                let f = fs::OpenOptions::new()
+                use std::io::Read;
+
+                let mut f = fs::OpenOptions::new()
                     .read(true)
                     .open(name)
                     .map_err(|e| CPSError {
                         error_type: ErrorType::Runtime,
                         message: format!("Failed to open file '{}': {}", name, e),
                         hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
+                        line: 0, column: 0, source: None,
                     })?;
-                CloneableFile(f)
+
+                let mut contents = String::new();
+                f.read_to_string(&mut contents).map_err(|e| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Failed to read file '{}': {}", name, e),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                })?;
+                let lines: Vec<String> = contents.lines().map(|l| l.to_string()).collect();
+
+                self.open_files.insert(name.to_string(), OpenFile {
+                    mode: mode.clone(),
+                    handle: None, 
+                    line_idx: 0,
+                    lines: Some(lines),
+                });
+                return Ok(());
             }
         };
 
@@ -517,22 +514,15 @@ impl Environment {
                 });
             }
 
-            // buffer lines on first read
-            if open_file.lines.is_none() {
-                use std::io::Read;
-                let mut contents = String::new();
-                if let Some(handle) = &mut open_file.handle {
-                    handle.0.read_to_string(&mut contents).map_err(|e| CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Failed to read file '{}': {}", filename, e),
-                        hint: None,
-                        line: 0, column: 0, source: None,
-                    })?;
-                }
-                open_file.lines = Some(contents.lines().map(|l| l.to_string()).collect());
-            }
-
-            let lines = open_file.lines.as_ref().unwrap();
+            let lines = match open_file.lines.as_ref() {
+                Some(l) => l,
+                None => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("File '{}' has not been buffered for reading", filename),
+                    hint: Some("File content should have been loaded on open".to_string()),
+                    line: 0, column: 0, source: None,
+                }),
+            };
             if open_file.line_idx >= lines.len() {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
@@ -570,7 +560,12 @@ impl Environment {
             }
             let is_eof = match &open_file.lines {
                 Some(lines) => open_file.line_idx >= lines.len(),
-                None => false, // not yet buffered, so not EOF
+                None => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("File '{}' has not been buffered", filename),
+                    hint: Some("File content was not loaded on open".to_string()),
+                    line: 0, column: 0, source: None,
+                }),
             };
             return Ok(is_eof);
         }

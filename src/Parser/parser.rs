@@ -418,12 +418,12 @@ impl Parser {
             TokenType::Return => self.parse_return().map_err(|e| (e, false)),
             TokenType::Call => self.parse_call().map_err(|e| (e, false)),
             TokenType::OpenFile => self.parse_open_file().map_err(|e| (e, false)),
+            TokenType::CloseFile => self.parse_close_file().map_err(|e| (e, false)),
             TokenType::WriteFile => self.parse_writefile().map_err(|e| (e, false)),
             TokenType::ReadFile => self.parse_readfile().map_err(|e| (e, false)),
             // terminate if it leaves the scope
             TokenType::Eof | TokenType::EndIf | TokenType::EndCase | TokenType::EndType |  
                 TokenType::Else | TokenType::Next | TokenType::Until | TokenType::EndClass | 
-                TokenType::CloseFile |  
                 TokenType::EndWhile | TokenType::EndFunction | TokenType::EndProcedure => {
                     if self.scope == 0 && token.token_type != TokenType::Eof {
                         return Err((CPSError {
@@ -1622,8 +1622,14 @@ impl Parser {
         }))
     }
 
+    fn parse_close_file(&mut self) -> Result<Ast, CPSError> {
+        let _ = self.advance();
+        let filename_expr = self.parse_expr(0)?;
+        return Ok(Ast::Stmt(Stmt::CloseFile { filename: Box::new(ast_to_expr(filename_expr)?) }) );
+    }
+
     fn parse_open_file(&mut self) -> Result<Ast, CPSError> {
-        let open_token = self.advance(); // consume 'open'
+        let _ = self.advance(); // consume 'open'
         let filename_expr = self.parse_expr(0)?;
         let for_token = self.advance();
         if for_token.token_type != TokenType::For {
@@ -1653,46 +1659,9 @@ impl Parser {
             }),
         };
 
-        self.scope += 1;
-
-        let stmts = self.parse_statements()?;
-
-        let close_token = self.advance();
-        if close_token.token_type != TokenType::CloseFile {
-            return Err(CPSError {
-                error_type: ErrorType::Syntax,
-                message: "Expected 'CLOSEFILE' after OPENFILE statement body".to_string(),
-                hint: Some("OPENFILE statement must be closed with 'CLOSEFILE'".to_string()),
-                line: close_token.line,
-                column: close_token.column,
-                source: Some(self.source.clone()),
-            });
-        }
-
-        self.scope -= 1;
-
-        let body_statements: Result<Vec<Stmt>, CPSError> = stmts.into_iter().map(|a| match a {
-            Ast::Stmt(s) => Ok(s),
-            _ => Err(CPSError {
-                error_type: ErrorType::Syntax,
-                message: "Expected statement in openfile body".to_string(),
-                hint: Some("OPENFILE statement body must contain valid statements".to_string()),
-                line: open_token.line,
-                column: open_token.column,
-                source: Some(self.source.clone()),
-            }),
-        }).collect();
-
-        // expect expression after closefile
-        let filename_after_close = self.parse_expr(0)?;
-
         return Ok(Ast::Stmt(Stmt::OpenFile {
             filename: Box::new(ast_to_expr(filename_expr)?),
             mode,
-            stmts: BlockStmt {
-                statements: body_statements?,
-            },
-            close_expr: Box::new(ast_to_expr(filename_after_close)?),
         }) );
     }
 
