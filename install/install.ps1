@@ -18,6 +18,12 @@ if ($PATH -notlike "*$INSTALL_DIR*") {
     Write-Host "✅ Added $INSTALL_DIR to PATH"
 }
 
+try {
+    Invoke-RestMethod -Uri "https://api.counterapi.dev/v2/faisal-fakihs-team-3104/pseudocode-interpreter/up" `
+        -Headers @{ Authorization = "Bearer ut_mcAnzaVRSEhLNrkq4vCKzvTxlGh6Be03xc4okb4p" } `
+        -Method Get | Out-Null
+} catch {}
+
 Write-Host ""
 Write-Host "✅ Installed cps $VERSION successfully!"
 Write-Host "   Restart your terminal then run: cps yourfile.cps"
