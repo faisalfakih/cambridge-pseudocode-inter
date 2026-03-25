@@ -11,6 +11,7 @@ const BUILTIN_FUNCTIONS: &[&str] = &[
     "RIGHT",
     "LENGTH",
     "MID",
+    "SUBSTRING",
     "LCASE",
     "UCASE",
     "INT",

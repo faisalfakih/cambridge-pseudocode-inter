@@ -5,7 +5,8 @@ pub fn call_builtin(name: String, args: &[Value]) -> Result<Option<Value>, CPSEr
     match name.as_str() {
         "RIGHT" => builtin_right(args),
         "LENGTH" => builtin_length(args),
-        "MID" => builtin_mid(args),
+        "MID" => builtin_mid(args, "MID"),
+        "SUBSTRING" => builtin_mid(args, "SUBSTRING"), // Alias for MID
         "LCASE" => builtin_lcase(args),
         "UCASE" => builtin_ucase(args),
         "INT" => builtin_int(args),
@@ -121,19 +122,19 @@ fn builtin_length(args: &[Value]) -> Result<Option<Value>, CPSError> {
     Ok(Some(Value::Integer(length)))
 }
 
-fn builtin_mid(args: &[Value]) -> Result<Option<Value>, CPSError> {
+fn builtin_mid(args: &[Value], name: &str) -> Result<Option<Value>, CPSError> {
     if args.len() != 3 {
-        return Err(arg_count_error("MID", 3, args.len()));
+        return Err(arg_count_error(name, 3, args.len()));
     }
-
-    let string = expect_string(&args[0], "MID", 1)?;
-    let start = expect_int(&args[1], "MID", 2)?;
-    let length = expect_int(&args[2], "MID", 3)?;
+ 
+    let string = expect_string(&args[0], name, 1)?;
+    let start = expect_int(&args[1], name, 2)?;
+    let length = expect_int(&args[2], name, 3)?;
     
     if start < 1 {
         return Err(CPSError {
             error_type: ErrorType::Runtime,
-            message: "MID start position must be >= 1".to_string(),
+            message: format!("{} start position must be >= 1", name),
             hint: None,
             line: 0,
             column: 0,
@@ -144,14 +145,14 @@ fn builtin_mid(args: &[Value]) -> Result<Option<Value>, CPSError> {
     if length < 0 {
         return Err(CPSError {
             error_type: ErrorType::Runtime,
-            message: "MID length must be non-negative".to_string(),
+            message: format!("{} length must be non-negative", name),
             hint: None,
             line: 0,
             column: 0,
             source: None,
         });
     }
-
+ 
     let chars: Vec<char> = string.chars().collect();
     let start_idx = (start - 1) as usize;
     

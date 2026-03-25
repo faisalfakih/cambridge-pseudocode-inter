@@ -74,9 +74,6 @@ else
   sudo mv "/tmp/$BINARY" "$INSTALL_DIR/$BINARY"
 fi
 
-curl -s -o /dev/null \
-  "https://api.counterapi.dev/v2/faisal-fakihs-team-3104/pseudocode-interpreter/up" \
-  -H "Authorization: Bearer ut_mcAnzaVRSEhLNrkq4vCKzvTxlGh6Be03xc4okb4p" || true
 
 echo ""
 echo "✅ Installed $BINARY $VERSION successfully!"
