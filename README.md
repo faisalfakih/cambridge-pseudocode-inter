@@ -129,18 +129,7 @@ This interpreter is designed to help students and educators work with Cambridge 
   - `INT(value)` - Convert to integer
   - `RAND(max)` - Generate random number [0, max)
 
-## 💡 Motivation
-
-You can't learn to ride a skateboard by watching someone else ride one. This concept applies not only to skateboarding but to almost every field that has ever existed. For this very reason, the best way to learn programming is through hands-on practice—writing code, testing it, debugging it, and iterating. However, for students studying Cambridge Computer Science, the lack of a reliable, freely available pseudocode interpreter has been a significant barrier. Without a way to execute their pseudocode, learners are forced to manually trace through logic or rely on expensive proprietary tools, which limits experimentation and slows down the learning process. This project aims to remove that barrier by providing an accessible, open-source interpreter that empowers students to learn through doing—running their code, seeing immediate results, and developing a deeper intuition for programming concepts.
-
-As a student working with the Cambridge International curriculum myself, I experienced this gap firsthand. This interpreter was born from both personal need and a desire to give back to the community:
-
-- **Immediate feedback** - Run and test pseudocode without manual execution
-- **Learning by doing** - Enable experimentation and iterative development
-- **Community resource** - Provide a free tool for fellow students and educators worldwide
-- **Skill demonstration** - Showcase compiler theory, type systems, and Rust proficiency
-
-## 🏗️ Architecture
+## Architecture
 
 The interpreter follows a classic three-stage architecture:
 
@@ -170,7 +159,7 @@ Source Code → Lexer → Parser → Interpreter → Output
    - Helpful hints for common mistakes
    - Runtime and syntax error differentiation
 
-## 📚 Example Programs
+## Example Programs
 
 ### Hello World
 
