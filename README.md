@@ -6,7 +6,18 @@
 
 A Rust-based interpreter for Cambridge International AS & A Level Computer Science (9618) pseudocode specification. This project implements a complete interpreter capable of parsing and executing pseudocode according to the Cambridge syllabus standards.
 
-## 📦 Installation
+## Try it instantly
+
+Use the interpreter directly in your browser with no installation required:
+
+https://www.cambridge-pseudocode.com/
+
+### Features
+- Full online IDE for writing and running pseudocode
+- Practice problems (LeetCode-style, with exam-style questions coming soon)
+- Built-in learning resources for the Cambridge pseudocode specification
+  
+##  Installation
 
 ### Linux/macOS
 ```bash
