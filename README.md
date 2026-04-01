@@ -4,7 +4,7 @@
 ![Version](https://img.shields.io/github/v/release/faisalfakih/cambridge-psudocode-inter)
 ![License](https://img.shields.io/github/license/faisalfakih/cambridge-psudocode-inter)
 
-A Rust-based interpreter for Cambridge International AS & A Level Computer Science (9618) pseudocode specification. This project implements a complete interpreter capable of parsing and executing pseudocode according to the Cambridge syllabus standards.
+A Rust-based interpreter for Cambridge International AS & A Level Computer Science (9618) pseudocode specification. This project implements a complete interpreter that parses and executes pseudocode in accordance with the Cambridge syllabus standards.
 
 ## Try it instantly
 
@@ -14,7 +14,7 @@ https://www.cambridge-pseudocode.com/
 
 ### Features
 - Full online IDE for writing and running pseudocode
-- Practice problems (LeetCode-style, with exam-style questions coming soon)
+- Practice problems (both exam-style and LeetCode-style questions available)
 - Built-in learning resources for the Cambridge pseudocode specification
   
 ##  Installation
