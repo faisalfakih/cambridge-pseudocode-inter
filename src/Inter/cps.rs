@@ -115,13 +115,14 @@ impl Environment {
     // }
 
     pub fn new_child(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
+        let next_address = parent.borrow().next_address; // start child environment's address space where parent left off
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
             parent: Some(parent),
             open_files: HashMap::new(),
             constants: HashSet::new(),
             memory: HashMap::new(),
-            next_address: 0,
+            next_address: next_address,
         }))
     }
 
