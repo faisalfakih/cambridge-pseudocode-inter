@@ -7,6 +7,7 @@ use crate::errortype::{CPSError, ErrorType};
 use crate::Parser::ast::{BlockStmt, Expr, FileMode};
 
 
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Integer,
@@ -76,10 +77,12 @@ pub struct Function {
 
 #[derive(Debug, Clone)]
 pub struct Environment {
-    pub bindings: HashMap<String, Value>,
+    pub bindings: HashMap<String, usize>,
     parent: Option<Rc<RefCell<Environment>>>,
     pub open_files: HashMap<String, OpenFile>, // track open files by variable name
     constants: HashSet<String>, // track constant variable names
+    pub memory: HashMap<usize, Value>, // for use in pointers and reference types in the future 
+    next_address: usize, // simple counter to assign unique addresses for reference types
 }
 
 impl Environment {
@@ -89,6 +92,8 @@ impl Environment {
             parent: None,
             open_files: HashMap::new(),
             constants: HashSet::new(),
+            memory: HashMap::new(),
+            next_address: 0,
         }));
         
         // declare builtin functions here
@@ -115,13 +120,18 @@ impl Environment {
             parent: Some(parent),
             open_files: HashMap::new(),
             constants: HashSet::new(),
+            memory: HashMap::new(),
+            next_address: 0,
         }))
     }
 
+    fn get_variable_at_address(&self, address: usize) -> Option<Value> {
+        self.memory.get(&address).cloned()
+    }
 
     pub fn get(&self, name: &str) -> Option<Value> {
-        if let Some(value) = self.bindings.get(name) {
-            return Some(value.clone());
+        if let Some(address) = self.bindings.get(name) {
+            return Some(self.get_variable_at_address(*address)?);
         }
 
         match &self.parent {
@@ -143,7 +153,10 @@ impl Environment {
         }
 
         if self.bindings.contains_key(name) {
-            self.bindings.insert(name.to_string(), value);
+            // variable exists in current scope, update it
+            let address = self.bindings[name];
+            self.memory.insert(address, value);
+
             return Ok(());
         }
 
@@ -161,67 +174,73 @@ impl Environment {
 
 
     pub fn set_array_element(&mut self, name: &str, index: usize, col: Option<usize>, value: Value) -> Result<(), CPSError> {
-        if let Some(current_value) = self.bindings.get_mut(name) {
-            match current_value {
-                Value::Array { array, lower_bound, bounds_2d } => {
-                    if index < *lower_bound {
-                        return Err(CPSError {
-                            error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!("Array index {} is below lower bound {} for '{}'", index, lower_bound, name),
-                            hint: Some(format!("Valid indices start from {}", lower_bound)),
-                            line: 0, column: 0, source: None,
-                        });
-                    }
+        if let Some(address) = self.bindings.get(name) {
+            if let Some(current_value) = self.memory.get_mut(address) {
+                match current_value {
+                    Value::Array { array, lower_bound, bounds_2d } => {
+                        let lower_bound = *lower_bound;
+                        let bounds_2d = *bounds_2d;
 
-                    let flat_index = if let Some((col_lb, col_ub)) = bounds_2d {
-                        let col_idx = col.ok_or_else(|| CPSError {
-                            error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!("Missing column index for 2D array '{}'", name),
-                            hint: Some("2D arrays require both row and column indices".to_string()),
-                            line: 0, column: 0, source: None,
-                        })?;
-
-                        let col_count = *col_ub - *col_lb + 1;
-                        let row_offset = index - *lower_bound;
-                        let col_offset = col_idx.checked_sub(*col_lb).ok_or_else(|| CPSError {
-                            error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!("Column index {} is below lower bound {} for '{}'", col_idx, col_lb, name),
-                            hint: Some(format!("Valid column indices start from {}", col_lb)),
-                            line: 0, column: 0, source: None,
-                        })?;
-
-                        if col_offset >= col_count {
+                        if index < lower_bound {
                             return Err(CPSError {
                                 error_type: crate::errortype::ErrorType::Runtime,
-                                message: format!("Column index {} is out of bounds for '{}'", col_idx, name),
-                                hint: Some(format!("Valid column indices range from {} to {}", col_lb, col_ub)),
+                                message: format!("Array index {} is below lower bound {} for '{}'", index, lower_bound, name),
+                                hint: Some(format!("Valid indices start from {}", lower_bound)),
                                 line: 0, column: 0, source: None,
                             });
                         }
 
-                        row_offset * col_count + col_offset
-                    } else {
-                        index - *lower_bound
-                    };
+                        let flat_index = if let Some((col_lb, col_ub)) = bounds_2d {
+                            let col_idx = col.ok_or_else(|| CPSError {
+                                error_type: crate::errortype::ErrorType::Runtime,
+                                message: format!("Missing column index for 2D array '{}'", name),
+                                hint: Some("2D arrays require both row and column indices".to_string()),
+                                line: 0, column: 0, source: None,
+                            })?;
 
-                    if flat_index >= array.len() {
-                        return Err(CPSError {
-                            error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!("Array index out of bounds for '{}'", name),
-                            hint: None,
-                            line: 0, column: 0, source: None,
-                        });
+                            let col_count = col_ub - col_lb + 1;
+                            let row_offset = index - lower_bound;
+                            let col_offset = col_idx.checked_sub(col_lb).ok_or_else(|| CPSError {
+                                error_type: crate::errortype::ErrorType::Runtime,
+                                message: format!("Column index {} is below lower bound {} for '{}'", col_idx, col_lb, name),
+                                hint: Some(format!("Valid column indices start from {}", col_lb)),
+                                line: 0, column: 0, source: None,
+                            })?;
+
+                            if col_offset >= col_count {
+                                return Err(CPSError {
+                                    error_type: crate::errortype::ErrorType::Runtime,
+                                    message: format!("Column index {} is out of bounds for '{}'", col_idx, name),
+                                    hint: Some(format!("Valid column indices range from {} to {}", col_lb, col_ub)),
+                                    line: 0, column: 0, source: None,
+                                });
+                            }
+
+                            row_offset * col_count + col_offset
+                        } else {
+                            index - lower_bound
+                        };
+
+                        if flat_index >= array.len() {
+                            return Err(CPSError {
+                                error_type: crate::errortype::ErrorType::Runtime,
+                                message: format!("Array index out of bounds for '{}'", name),
+                                hint: None,
+                                line: 0, column: 0, source: None,
+                            });
+                        }
+
+                        array[flat_index] = value;
+
+                        return Ok(());
                     }
-
-                    array[flat_index] = value;
-                    return Ok(());
+                    _ => return Err(CPSError {
+                        error_type: crate::errortype::ErrorType::Runtime,
+                        message: format!("Variable '{}' is not an array", name),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    }),
                 }
-                _ => return Err(CPSError {
-                    error_type: crate::errortype::ErrorType::Runtime,
-                    message: format!("Variable '{}' is not an array", name),
-                    hint: None,
-                    line: 0, column: 0, source: None,
-                }),
             }
         }
 
@@ -237,10 +256,16 @@ impl Environment {
     }
 
     pub fn get_array_element(&self, name: &str, index: usize, col: Option<usize>) -> Result<Value, CPSError> {
-        if let Some(current_value) = self.bindings.get(name) {
+        if let Some(address) = self.bindings.get(name) {
+            let current_value = self.get_variable_at_address(*address).ok_or_else(|| CPSError {
+                error_type: crate::errortype::ErrorType::Runtime,
+                message: format!("Variable '{}' not found in memory", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            })?;
             match current_value {
                 Value::Array { array, lower_bound, bounds_2d } => {
-                    if index < *lower_bound {
+                    if index < lower_bound {
                         return Err(CPSError {
                             error_type: crate::errortype::ErrorType::Runtime,
                             message: format!("Array index {} is below lower bound {} for '{}'", index, lower_bound, name),
@@ -257,9 +282,9 @@ impl Environment {
                             line: 0, column: 0, source: None,
                         })?;
 
-                        let col_count = *col_ub - *col_lb + 1;
-                        let row_offset = index - *lower_bound;
-                        let col_offset = col_idx.checked_sub(*col_lb).ok_or_else(|| CPSError {
+                        let col_count = col_ub - col_lb + 1;
+                        let row_offset = index - lower_bound;
+                        let col_offset = col_idx.checked_sub(col_lb).ok_or_else(|| CPSError {
                             error_type: crate::errortype::ErrorType::Runtime,
                             message: format!("Column index {} is below lower bound {} for '{}'", col_idx, col_lb, name),
                             hint: Some(format!("Valid column indices start from {}", col_lb)),
@@ -277,7 +302,7 @@ impl Environment {
 
                         row_offset * col_count + col_offset
                     } else {
-                        index - *lower_bound
+                        index - lower_bound
                     };
 
                     if flat_index >= array.len() {
@@ -584,7 +609,13 @@ impl Environment {
 
 
     pub fn get_type(&mut self, name: &str) -> Result<Type, CPSError> {
-        if let Some(value) = self.bindings.get(name) {
+        if let Some(address) = self.bindings.get(name) {
+            let value = self.get_variable_at_address(*address).ok_or_else(|| CPSError {
+                error_type: crate::errortype::ErrorType::Runtime,
+                message: format!("Variable '{}' not found in memory", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            })?;
             let var_type = match value {
                 Value::Integer(_) => Type::Integer,
                 Value::Real(_) => Type::Real,
@@ -595,16 +626,16 @@ impl Environment {
                     let (upper_bound, bounds_2d_type) = if let Some((col_lb, col_ub)) = bounds_2d {
                         let col_count = col_ub - col_lb + 1;
                         let row_count = array.len() / col_count;
-                        let row_ub = *lower_bound + row_count - 1;
+                        let row_ub = lower_bound + row_count - 1;
                         (
                             row_ub as i64,
                             Some((
-                                    Box::new(Expr::Literal(Value::Integer(*col_lb as i64))),
-                                    Box::new(Expr::Literal(Value::Integer(*col_ub as i64))),
+                                    Box::new(Expr::Literal(Value::Integer(col_lb as i64))),
+                                    Box::new(Expr::Literal(Value::Integer(col_ub as i64))),
                             ))
                         )
                     } else {
-                        ((array.len() + *lower_bound - 1) as i64, None)
+                        ((array.len() + lower_bound - 1) as i64, None)
                     };
 
                     let base_type = if let Some(first_elem) = array.first() {
@@ -635,7 +666,7 @@ impl Environment {
                     };
 
                     Type::Array(ArrayType {
-                        lower_bound: Box::new(Expr::Literal(Value::Integer(*lower_bound as i64))),
+                        lower_bound: Box::new(Expr::Literal(Value::Integer(lower_bound as i64))),
                         upper_bound: Box::new(Expr::Literal(Value::Integer(upper_bound))),
                         bounds_2d: bounds_2d_type,
                         base_type: Box::new(base_type),
@@ -693,7 +724,21 @@ impl Environment {
                 line: 0, column: 0, source: None,
             });
         }
-        self.bindings.insert(name, value);
+
+        // check if it's an array 
+        let current_addr = self.next_address;
+        self.memory.insert(current_addr, value.clone());
+        self.bindings.insert(name, current_addr);
+
+        match &value {
+            Value::Array { array, lower_bound: _, bounds_2d: _ } => {
+                let arr_size = array.len();
+                self.next_address += arr_size; // reserve contiguous addresses for the array
+            }
+            _ => self.next_address += 1, // reserve one address for non-array values
+        }
+
+
         Ok(())
     }
 
