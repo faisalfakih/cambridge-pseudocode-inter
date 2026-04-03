@@ -1,5 +1,10 @@
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::{cell::RefCell, rc::Rc};
+
+// Thread+channel web mode is not available on WASM.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::Inter::web::{WebContext, WebEvent};
 
 use crate::errortype::{CPSError, ErrorType};
 use crate::Inter::cps::{ArrayType, Environment, Function, Type, Value};
@@ -18,27 +23,144 @@ const BUILTIN_FUNCTIONS: &[&str] = &[
     "RAND",
 ];
 
-#[derive(Debug, Clone)]
+/// A file living in memory (used for file I/O in web / WASM modes, and as the "write log" for replay mode).
+#[derive(Clone, Debug)]
+pub struct VirtualFile {
+    // Lines stored in the file (written lines, or pre-loaded content for reads).
+    pub lines: Vec<String>,
+    // Next line index to serve on `READFILE`.
+    pub read_pos: usize,
+    pub write_pos: usize,
+    pub mode: FileMode,
+    pub open: bool,
+}
+
+/// State shared between the interpreter and `StepInterpreter` during a replay
+/// run. The interpreter reads from `inputs` and writes signals back via the
+/// `ErrorType::StepOutput` / `StepNeedsInput` error variants.
+#[derive(Debug)]
+pub struct ReplayContext {
+    pub inputs: Vec<String>,
+    pub input_pos: usize,
+    pub output_skip: usize,
+    pub rand_log: Vec<Value>,
+    pub rand_pos: usize,
+    pub virtual_fs: Rc<RefCell<HashMap<String, VirtualFile>>>,
+}
+
+#[derive(Debug)]
 pub struct Interpreter {
     current_env: Rc<RefCell<Environment>>,
+    /// Thread+channel bridge for the server-side web mode (non-WASM only).
+    #[cfg(not(target_arch = "wasm32"))]
+    web_ctx: Option<WebContext>,
+    /// Replay context for the step-based WASM mode.
+    replay_ctx: Option<Rc<RefCell<ReplayContext>>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let interpreter = Interpreter {
+        Interpreter {
             current_env: Environment::new_global(),
-        };
+            #[cfg(not(target_arch = "wasm32"))]
+            web_ctx: None,
+            replay_ctx: None,
+        }
+    }
 
-        // // define builtin function 
-        // for &func_name in BUILTIN_FUNCTIONS.iter() {
-        //     interpreter.current_env.borrow_mut().define(
-        //         func_name.to_string(),
-        //         // Value::Function(FunctionType::Builtin(func_name.to_string()))
-        //     );
-        // }
-        
+    /// Create an interpreter that communicates with a web client via channels
+    /// instead of using stdin/stdout.  Not available in WASM builds.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_web(ctx: WebContext) -> Self {
+        Interpreter {
+            current_env: Environment::new_global(),
+            web_ctx: Some(ctx),
+            replay_ctx: None,
+        }
+    }
 
-        interpreter
+    pub fn new_replay(ctx: Rc<RefCell<ReplayContext>>) -> Self {
+        Interpreter {
+            current_env: Environment::new_global(),
+            #[cfg(not(target_arch = "wasm32"))]
+            web_ctx: None,
+            replay_ctx: Some(ctx),
+        }
+    }
+
+    fn is_web_mode(&self) -> bool {
+        if self.replay_ctx.is_some() {
+            return true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.web_ctx.is_some() {
+            return true;
+        }
+        false
+    }
+
+    fn emit_output(&self, output: String) -> Result<(), CPSError> {
+        if let Some(ref ctx_rc) = self.replay_ctx {
+            let mut ctx = ctx_rc.borrow_mut();
+            if ctx.output_skip > 0 {
+                ctx.output_skip -= 1;
+                return Ok(());
+            }
+            return Err(CPSError {
+                error_type: ErrorType::StepOutput(output),
+                message: String::new(),
+                hint: None,
+                line: 0,
+                column: 0,
+                source: None,
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref ctx) = self.web_ctx {
+            let _ = ctx.event_tx.send(WebEvent::Output(output));
+            return Ok(());
+        }
+        println!("{}", output);
+        Ok(())
+    }
+
+    fn read_input(&self, variable_name: &str) -> Result<String, CPSError> {
+        if let Some(ref ctx_rc) = self.replay_ctx {
+            let mut ctx = ctx_rc.borrow_mut();
+            if ctx.input_pos < ctx.inputs.len() {
+                let input = ctx.inputs[ctx.input_pos].clone();
+                ctx.input_pos += 1;
+                return Ok(input);
+            } else {
+                return Err(CPSError {
+                    error_type: ErrorType::StepNeedsInput(variable_name.to_string()),
+                    message: String::new(),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                });
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref ctx) = self.web_ctx {
+            let _ = ctx.event_tx.send(WebEvent::NeedsInput {
+                variable: variable_name.to_string(),
+            });
+            return ctx.input_rx.recv().map_err(|_| CPSError {
+                error_type: ErrorType::Runtime,
+                message: "Web client disconnected while waiting for input".to_string(),
+                hint: None,
+                line: 0,
+                column: 0,
+                source: None,
+            });
+        }
+        use std::io::{self, Write};
+        io::stdout().flush().unwrap();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        Ok(input.trim().to_string())
     }
 
     pub fn interpret(&mut self, ast_nodes: Vec<Ast>) -> Result<(), CPSError> {
@@ -46,6 +168,38 @@ impl Interpreter {
             self.evaluate_ast(node)?;
         }
         Ok(())
+    }
+
+    pub fn interpret_slice(&mut self, ast_nodes: &[Ast]) -> Result<(), CPSError> {
+        for node in ast_nodes {
+            self.evaluate_ast_ref(node)?;
+        }
+        Ok(())
+    }
+
+    fn evaluate_ast_ref(&mut self, node: &Ast) -> Result<Value, CPSError> {
+        match node {
+            Ast::Expression(expr) => self.evaluate_expr(expr),
+            Ast::Identifier(name) => {
+                match self.current_env.borrow().get(name) {
+                    Some(value) => Ok(value),
+                    None => Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Undefined identifier: {}", name),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    }),
+                }
+            },
+            Ast::Stmt(stmt) => {
+                match self.evaluate_stmt(stmt) {
+                    Ok(_) => Ok(Value::Boolean(true)),
+                    Err(e) => Err(e),
+                }
+            },
+        }
     }
 
     fn evaluate_ast(&mut self, node: Ast) -> Result<Value, CPSError> {
@@ -535,18 +689,17 @@ impl Interpreter {
                 });
             }
         };
-        println!("{}", value);
-        Ok(())
+        self.emit_output(value)
     }
 
     fn evaluate_input_stmt(&mut self, identifier: &Box<Expr>) -> Result<(), CPSError> {
-        use std::io::{self, Write};
-
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim().to_string();
+        // Determine the variable/array name for the NeedsInput event befor blocking so the web client knows what it is being asked for.
+        let var_name = match identifier.as_ref() {
+            Expr::Literal(Value::Identifier(iden)) => iden.clone(),
+            Expr::ArrayAccess { name, .. } => name.clone(),
+            _ => String::from("?"),
+        };
+        let input = self.read_input(&var_name)?;
 
         match identifier.as_ref() {
             Expr::Literal(name) => {
@@ -1078,6 +1231,61 @@ impl Interpreter {
     }
 
     fn evaluate_open_file(&mut self, filename: &Box<Expr>, mode: &FileMode) -> Result<(), CPSError> {
+        if let Some(ctx_rc) = self.replay_ctx.clone() {
+            let filename_value = self.evaluate_expr(filename)?;
+            let filename_str = match filename_value {
+                Value::String(s) => s,
+                other => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Filename in OPENFILE statement must evaluate to a string, got: {:?}", other),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            };
+            let ctx = ctx_rc.borrow();
+            let mut vfs = ctx.virtual_fs.borrow_mut();
+            match mode {
+                FileMode::Write => {
+                    let entry = vfs.entry(filename_str).or_insert_with(|| VirtualFile {
+                        lines: Vec::new(),
+                        read_pos: 0,
+                        write_pos: 0,
+                        mode: FileMode::Write,
+                        open: false,
+                    });
+                    entry.lines.clear();
+                    entry.mode = FileMode::Write;
+                    entry.read_pos = 0;
+                    entry.write_pos = 0;
+                    entry.open = true;
+                }
+                FileMode::Append => {
+                    let entry = vfs.entry(filename_str).or_insert_with(|| VirtualFile {
+                        lines: Vec::new(),
+                        read_pos: 0,
+                        write_pos: 0,
+                        mode: FileMode::Append,
+                        open: false,
+                    });
+                    entry.mode = FileMode::Append;
+                    entry.write_pos = entry.lines.len();
+                    entry.open = true;
+                }
+                FileMode::Read => {
+                    let entry = vfs.entry(filename_str).or_insert_with(|| VirtualFile {
+                        lines: Vec::new(),
+                        read_pos: 0,
+                        write_pos: 0,
+                        mode: FileMode::Read,
+                        open: false,
+                    });
+                    entry.mode = FileMode::Read;
+                    entry.read_pos = 0;
+                    entry.open = true;
+                }
+            }
+            return Ok(());
+        }
         let filename_value = self.evaluate_expr(filename)?;
         let filename_str;
         match &filename_value {
@@ -1100,6 +1308,30 @@ impl Interpreter {
     }
 
     fn evaluate_close_file(&mut self, filename: &Box<Expr>) -> Result<(), CPSError> {
+        if let Some(ctx_rc) = self.replay_ctx.clone() {
+            let filename_value = self.evaluate_expr(filename)?;
+            let filename_str = match filename_value {
+                Value::String(s) => s,
+                other => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Filename in CLOSEFILE statement must evaluate to a string, got: {:?}", other),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            };
+            let ctx = ctx_rc.borrow();
+            let mut vfs = ctx.virtual_fs.borrow_mut();
+            if let Some(vfile) = vfs.get_mut(&filename_str) {
+                vfile.open = false;
+                return Ok(());
+            }
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot close file '{}': file is not open", filename_str),
+                hint: None,
+                line: 0, column: 0, source: None,
+            });
+        }
         let filename_value = self.evaluate_expr(filename)?;
         let filename_str;
         match &filename_value {
@@ -1120,6 +1352,58 @@ impl Interpreter {
     }
 
     fn evaluate_write_file(&mut self, filename: &Box<Expr>, value: &Box<Expr>) -> Result<(), CPSError> {
+        if let Some(ctx_rc) = self.replay_ctx.clone() {
+            let filename_value = self.evaluate_expr(filename)?;
+            let filename_str = match filename_value {
+                Value::String(s) => s,
+                other => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Filename in WRITEFILE statement must evaluate to a string, got: {:?}", other),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            };
+            let value_to_write = self.evaluate_expr(value)?;
+            let line = match &value_to_write {
+                Value::Integer(i) => i.to_string(),
+                Value::Real(f) => f.to_string(),
+                Value::String(s) => s.clone(),
+                Value::Boolean(b) => b.to_string(),
+                Value::Char(c) => c.to_string(),
+                other => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Unsupported value type for writing to file: {:?}", other),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            };
+            let ctx = ctx_rc.borrow();
+            let mut vfs = ctx.virtual_fs.borrow_mut();
+            if let Some(vfile) = vfs.get_mut(&filename_str) {
+                if vfile.mode == FileMode::Read {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Cannot write to file '{}': file is opened in read mode", filename_str),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    });
+                }
+                // if the write_pos < lines.len(), then this write is already captured in the log, so we just advance the cursor without writing
+                if vfile.write_pos < vfile.lines.len() {
+                    vfile.write_pos += 1;
+                } else {
+                    vfile.lines.push(line);
+                    vfile.write_pos += 1;
+                }
+                return Ok(());
+            }
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("File '{}' is not open", filename_str),
+                hint: None,
+                line: 0, column: 0, source: None,
+            });
+        }
         let filename_value = self.evaluate_expr(filename)?;
         let filename_str;
         match &filename_value {
@@ -1142,6 +1426,89 @@ impl Interpreter {
     }
 
     fn evaluate_read_file(&mut self, filename: &Box<Expr>, target: &Box<Expr>) -> Result<(), CPSError> {
+        if let Some(ctx_rc) = self.replay_ctx.clone() {
+            let filename_value = self.evaluate_expr(filename)?;
+            let filename_str = match filename_value {
+                Value::String(s) => s,
+                other => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Filename in READFILE must be a string, got: {:?}", other),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            };
+            let line = {
+                let ctx = ctx_rc.borrow();
+                let mut vfs = ctx.virtual_fs.borrow_mut();
+                if let Some(vfile) = vfs.get_mut(&filename_str) {
+                    if vfile.mode != FileMode::Read {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Cannot read from file '{}': file is not opened in read mode", filename_str),
+                            hint: None,
+                            line: 0, column: 0, source: None,
+                        });
+                    }
+                    if vfile.read_pos >= vfile.lines.len() {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Cannot read past end of file '{}'", filename_str),
+                            hint: Some("Check EOF before reading".to_string()),
+                            line: 0, column: 0, source: None,
+                        });
+                    }
+                    let line = vfile.lines[vfile.read_pos].clone();
+                    vfile.read_pos += 1;
+                    line
+                } else {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("File '{}' is not open", filename_str),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    });
+                }
+            };
+            return match target.as_ref() {
+                Expr::Literal(Value::Identifier(iden)) => {
+                    self.current_env
+                        .borrow_mut()
+                        .set(iden, Value::String(line))
+                        .map_err(|e| CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Failed to assign READFILE result to '{}': {}", iden, e.message),
+                            hint: None,
+                            line: 0, column: 0, source: None,
+                        })
+                }
+                Expr::ArrayAccess { name, index, col } => {
+                    let index_value = self.evaluate_expr(index)?;
+                    let index_int = self.value_to_index(&index_value, name)?;
+                    let col_int = match col {
+                        Some(col_expr) => {
+                            let col_value = self.evaluate_expr(col_expr)?;
+                            Some(self.value_to_index(&col_value, name)?)
+                        }
+                        None => None,
+                    };
+                    self.current_env
+                        .borrow_mut()
+                        .set_array_element(name, index_int as usize, col_int.map(|c| c as usize), Value::String(line))
+                        .map_err(|e| CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Failed to assign READFILE result to array element: {}", e.message),
+                            hint: None,
+                            line: 0, column: 0, source: None,
+                        })
+                }
+                _ => Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("READFILE target must be a variable or array element, got: {:?}", target),
+                    hint: None,
+                    line: 0, column: 0, source: None,
+                }),
+            };
+        }
         let filename_value = self.evaluate_expr(filename)?;
         let filename_str = match &filename_value {
             Value::String(s) => s.clone(),
@@ -1354,6 +1721,39 @@ impl Interpreter {
     }
 
     fn evaluate_call(&mut self, identifier: &String, arguments: &Vec<Expr>) -> Result<Value, CPSError> {
+        if identifier == "RAND" {
+            let rand_ctx = self.replay_ctx.as_ref().map(Rc::clone);
+            if let Some(ctx_rc) = rand_ctx {
+                let maybe_logged = {
+                    let ctx = ctx_rc.borrow();
+                    if ctx.rand_pos < ctx.rand_log.len() {
+                        Some(ctx.rand_log[ctx.rand_pos].clone())
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(val) = maybe_logged {
+                    ctx_rc.borrow_mut().rand_pos += 1;
+                    return Ok(val);
+                }
+
+                let arg_values: Result<Vec<Value>, CPSError> = arguments
+                    .iter()
+                    .map(|arg| self.evaluate_expr(arg))
+                    .collect();
+                let arg_values = arg_values?;
+                let value = match crate::Inter::builtins::call_builtin(identifier.clone(), &arg_values)? {
+                    Some(v) => v,
+                    None => Value::Boolean(false),
+                };
+                let mut ctx = ctx_rc.borrow_mut();
+                ctx.rand_log.push(value.clone());
+                ctx.rand_pos += 1;
+                return Ok(value);
+            }
+        }
+
         if BUILTIN_FUNCTIONS.contains(&identifier.as_str()) {
             let arg_values: Result<Vec<Value>, CPSError> = arguments
                 .iter()
@@ -1511,6 +1911,19 @@ impl Interpreter {
             Expr::Call { name, arguments } => self.evaluate_call(name, arguments),
             Expr::ArrayAccess { name, index, col } => self.evaluate_array_access(name, index, col),
             Expr::EOF { filename } => {
+                if let Some(ctx_rc) = self.replay_ctx.clone() {
+                    let ctx = ctx_rc.borrow();
+                    let vfs = ctx.virtual_fs.borrow();
+                    if let Some(vfile) = vfs.get(filename.as_str()) {
+                        return Ok(Value::Boolean(vfile.read_pos >= vfile.lines.len()));
+                    }
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("File '{}' is not open", filename),
+                        hint: Some("Make sure to open the file before checking EOF".to_string()),
+                        line: 0, column: 0, source: None,
+                    });
+                }
                 let is_eof = self.current_env.borrow().is_eof(filename)?;
                 Ok(Value::Boolean(is_eof))
             }

@@ -240,6 +240,45 @@ impl Lexer {
                 tokens.push(token);
                 break;
             }
+
+            // If the lexer produced a negative number literal (e.g. `-5`) but the
+            // previous token ends an expression (identifier, number, `)`, `]`,
+            // TRUE, FALSE), the `-` is a binary subtraction operator, not a unary
+            // sign.  Split it into a Minus token followed by the positive literal.
+            if token.token_type == TokenType::NumberLiteral
+                && token.lexeme.starts_with('-')
+            {
+                let prev_is_value = tokens.last().map_or(false, |t| {
+                    matches!(
+                        t.token_type,
+                        TokenType::Identifier
+                            | TokenType::NumberLiteral
+                            | TokenType::StringLiteral
+                            | TokenType::CharLiteral
+                            | TokenType::RParen
+                            | TokenType::RSquare
+                            | TokenType::True
+                            | TokenType::False
+                    )
+                });
+                if prev_is_value {
+                    tokens.push(Token::new(
+                        "-".to_string(),
+                        TokenType::Minus,
+                        token.line,
+                        token.column,
+                    ));
+                    let positive_lexeme = token.lexeme[1..].to_string();
+                    tokens.push(Token::new(
+                        positive_lexeme,
+                        TokenType::NumberLiteral,
+                        token.line,
+                        token.column + 1,
+                    ));
+                    continue;
+                }
+            }
+
             tokens.push(token);
         }
 
@@ -320,8 +359,27 @@ impl Lexer {
                 '<' => {
                     let next_char = self.peek(1);
                     if next_char == Some('-') {
+                        let next_next_char = self.peek(2);
+                        let next_next_next_char = match self.peek(3) {
+                            Some(c) => c,
+                            None => '\0', // Use null character to indicate end of file
+                        };
+                        if next_next_char == Some('-') && !next_next_next_char.is_digit(10) {
+                            // check if the one after that is NOT a number literal and not whitespace (if it isn't then error)
+                                return Err(CPSError {
+                                    error_type: ErrorType::Lexical,
+                                    message: "Unexpected token: '<--'".to_string(),
+                                    hint: Some("Did you mean '<-' (with one '-' not two) for the assignment operator?".to_string()),
+                                    line: self.line,
+                                    column: self.column,
+                                    source: Some(self.source.clone()),
+                            });
+                        }
+
                         self.position += 2;
                         self.column += 2;
+                        
+
                         return Ok(Token::new("<-".to_string(), TokenType::Arrow, self.line, self.column - 2))
                     }
                     else if next_char == Some('=') {

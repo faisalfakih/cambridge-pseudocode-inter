@@ -6,10 +6,15 @@ use crate::Inter::cps::Value;
 
 #[derive(Debug, Clone)]
 pub enum ErrorType {
-    Lexical, 
+    Lexical,
     Syntax,
     Return(Value), // For return in functions (as a call, not an error)
     Runtime,
+    // Internal signals for the step-based WASM interpreter.
+    // These are thrown to unwind the call stack and are always caught by
+    // StepInterpreter::step() before reaching any user-facing error path.
+    StepOutput(String),
+    StepNeedsInput(String),
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +36,7 @@ impl std::fmt::Display for ErrorType {
             ErrorType::Syntax => write!(f, "Syntax"),
             ErrorType::Runtime => write!(f, "Runtime"),
             ErrorType::Return(_) => write!(f, "Return"),
+            ErrorType::StepOutput(_) | ErrorType::StepNeedsInput(_) => write!(f, "Internal"),
         }
     }
 }
