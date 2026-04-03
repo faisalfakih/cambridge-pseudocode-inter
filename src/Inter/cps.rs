@@ -81,7 +81,7 @@ pub struct Environment {
     parent: Option<Rc<RefCell<Environment>>>,
     pub open_files: HashMap<String, OpenFile>, // track open files by variable name
     constants: HashSet<String>, // track constant variable names
-    pub memory: HashMap<usize, Value>, // for use in pointers and reference types in the future 
+    pub heap: Rc<RefCell<HashMap<usize, Value>>>, // for use in pointers and reference types in the future 
     next_address: usize, // simple counter to assign unique addresses for reference types
 }
 
@@ -92,7 +92,7 @@ impl Environment {
             parent: None,
             open_files: HashMap::new(),
             constants: HashSet::new(),
-            memory: HashMap::new(),
+            heap: Rc::new(RefCell::new(HashMap::new())),
             next_address: 0,
         }));
         
@@ -118,16 +118,16 @@ impl Environment {
         let next_address = parent.borrow().next_address; // start child environment's address space where parent left off
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
-            parent: Some(parent),
+            parent: Some(parent.clone()),
             open_files: HashMap::new(),
             constants: HashSet::new(),
-            memory: HashMap::new(),
+            heap: Rc::clone(&parent.borrow().heap), // share heap with parent for reference types
             next_address: next_address,
         }))
     }
 
     fn get_variable_at_address(&self, address: usize) -> Option<Value> {
-        self.memory.get(&address).cloned()
+        self.heap.borrow().get(&address).cloned()
     }
 
     pub fn get(&self, name: &str) -> Option<Value> {
@@ -156,7 +156,7 @@ impl Environment {
         if self.bindings.contains_key(name) {
             // variable exists in current scope, update it
             let address = self.bindings[name];
-            self.memory.insert(address, value);
+            self.heap.borrow_mut().insert(address, value);
 
             return Ok(());
         }
@@ -176,7 +176,7 @@ impl Environment {
 
     pub fn set_array_element(&mut self, name: &str, index: usize, col: Option<usize>, value: Value) -> Result<(), CPSError> {
         if let Some(address) = self.bindings.get(name) {
-            if let Some(current_value) = self.memory.get_mut(address) {
+            if let Some(current_value) = self.heap.borrow_mut().get_mut(address) {
                 match current_value {
                     Value::Array { array, lower_bound, bounds_2d } => {
                         let lower_bound = *lower_bound;
@@ -728,16 +728,21 @@ impl Environment {
 
         // check if it's an array 
         let current_addr = self.next_address;
-        self.memory.insert(current_addr, value.clone());
+        self.heap.borrow_mut().insert(current_addr, value.clone());
         self.bindings.insert(name, current_addr);
 
-        match &value {
-            Value::Array { array, lower_bound: _, bounds_2d: _ } => {
-                let arr_size = array.len();
-                self.next_address += arr_size; // reserve contiguous addresses for the array
-            }
-            _ => self.next_address += 1, // reserve one address for non-array values
-        }
+        // ignore this, pointer arithmatic in the pseudocode works differently (+1 to a mem address will bring u to the next value past the array)
+        // match &value { 
+        //     Value::Array { array, lower_bound: _, bounds_2d: _ } => {
+        //         let arr_size = array.len();
+        //         self.next_address += arr_size; // reserve contiguous addresses for the array
+        //     }
+        //     _ => self.next_address += 1, // reserve one address for non-array values
+        // }
+
+        self.next_address += 1;
+
+
 
 
         Ok(())
