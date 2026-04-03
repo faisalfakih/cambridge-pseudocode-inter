@@ -115,13 +115,15 @@ impl Environment {
     // }
 
     pub fn new_child(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
+        let next_address = parent.borrow().next_address;
+
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
-            parent: Some(parent),
+            parent: Some(parent.clone()),
             open_files: HashMap::new(),
             constants: HashSet::new(),
             memory: HashMap::new(),
-            next_address: 0,
+            next_address, // start with the next available address from the parent
         }))
     }
 
