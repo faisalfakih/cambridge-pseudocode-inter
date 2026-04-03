@@ -36,3 +36,4 @@ main.cps
 # ignore text files (used for testing)
 *.txt
 
+CLAUDE.md
