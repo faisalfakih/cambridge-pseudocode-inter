@@ -52,7 +52,12 @@ impl WebRunner {
     /// - `{ type: "Error",      message: string }`
     pub fn step(&mut self) -> JsValue {
         let event = self.inner.step();
-        serde_wasm_bindgen::to_value(&event).unwrap_or(JsValue::NULL)
+        serde_wasm_bindgen::to_value(&event).unwrap_or_else(|e| {
+            let obj = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str("Error"));
+            let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("message"), &JsValue::from_str(&e.to_string()));
+            obj.into()
+        })
     }
 
     /// Supply the user's response to the most recent `NeedsInput` event.
@@ -79,6 +84,11 @@ impl WebRunner {
     /// during execution.
     pub fn list_written_files(&mut self) -> JsValue {
         let names = self.inner.list_written_files();
-        serde_wasm_bindgen::to_value(&names).unwrap_or(JsValue::NULL)
+        serde_wasm_bindgen::to_value(&names).unwrap_or_else(|e| {
+            let obj = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("error"), &JsValue::from_str("serialization_error"));
+            let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("message"), &JsValue::from_str(&e.to_string()));
+            obj.into()
+        })
     }
 }
