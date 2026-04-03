@@ -166,6 +166,7 @@ impl StepInterpreter {
             write_pos: 0,
             mode: FileMode::Read,
             open: false,
+            was_written: false,
         });
     }
 
@@ -176,12 +177,11 @@ impl StepInterpreter {
     }
 
     /// Return the names of all files that have been written or appended to
-    /// during execution (i.e. whose last open mode was Write or Append).
+    /// during execution.
     pub fn list_written_files(&self) -> Vec<String> {
-        use crate::Parser::ast::FileMode;
         self.virtual_fs
             .iter()
-            .filter(|(_, vf)| vf.mode == FileMode::Write || vf.mode == FileMode::Append)
+            .filter(|(_, vf)| vf.was_written)
             .map(|(name, _)| name.clone())
             .collect()
     }

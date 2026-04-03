@@ -33,6 +33,8 @@ pub struct VirtualFile {
     pub write_pos: usize,
     pub mode: FileMode,
     pub open: bool,
+    // True if the program ever wrote or appended to this file.
+    pub was_written: bool,
 }
 
 /// State shared between the interpreter and `StepInterpreter` during a replay
@@ -117,7 +119,14 @@ impl Interpreter {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref ctx) = self.web_ctx {
-            let _ = ctx.event_tx.send(WebEvent::Output(output));
+            ctx.event_tx.send(WebEvent::Output(output)).map_err(|_| CPSError {
+                error_type: ErrorType::Runtime,
+                message: "Web client disconnected".to_string(),
+                hint: None,
+                line: 0,
+                column: 0,
+                source: None,
+            })?;
             return Ok(());
         }
         println!("{}", output);
@@ -144,9 +153,16 @@ impl Interpreter {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref ctx) = self.web_ctx {
-            let _ = ctx.event_tx.send(WebEvent::NeedsInput {
+            ctx.event_tx.send(WebEvent::NeedsInput {
                 variable: variable_name.to_string(),
-            });
+            }).map_err(|_| CPSError {
+                error_type: ErrorType::Runtime,
+                message: "Web client disconnected".to_string(),
+                hint: None,
+                line: 0,
+                column: 0,
+                source: None,
+            })?;
             return ctx.input_rx.recv().map_err(|_| CPSError {
                 error_type: ErrorType::Runtime,
                 message: "Web client disconnected while waiting for input".to_string(),
@@ -1252,6 +1268,7 @@ impl Interpreter {
                         write_pos: 0,
                         mode: FileMode::Write,
                         open: false,
+                        was_written: false,
                     });
                     entry.lines.clear();
                     entry.mode = FileMode::Write;
@@ -1266,19 +1283,24 @@ impl Interpreter {
                         write_pos: 0,
                         mode: FileMode::Append,
                         open: false,
+                        was_written: false,
                     });
                     entry.mode = FileMode::Append;
-                    entry.write_pos = entry.lines.len();
+                    // Reset to 0 so that on replay the existing lines are
+                    // consumed (skipped) by the write-pos < lines.len() check
+                    // in evaluate_write_file, preventing duplicate appends.
+                    entry.write_pos = 0;
                     entry.open = true;
                 }
                 FileMode::Read => {
-                    let entry = vfs.entry(filename_str).or_insert_with(|| VirtualFile {
-                        lines: Vec::new(),
-                        read_pos: 0,
-                        write_pos: 0,
-                        mode: FileMode::Read,
-                        open: false,
-                    });
+                    let entry = vfs.get_mut(&filename_str).ok_or_else(|| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("File '{}' not found; it must be preloaded before opening for read", filename_str),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    })?;
                     entry.mode = FileMode::Read;
                     entry.read_pos = 0;
                     entry.open = true;
@@ -1389,6 +1411,7 @@ impl Interpreter {
                     });
                 }
                 // if the write_pos < lines.len(), then this write is already captured in the log, so we just advance the cursor without writing
+                vfile.was_written = true;
                 if vfile.write_pos < vfile.lines.len() {
                     vfile.write_pos += 1;
                 } else {
@@ -1724,6 +1747,13 @@ impl Interpreter {
         if identifier == "RAND" {
             let rand_ctx = self.replay_ctx.as_ref().map(Rc::clone);
             if let Some(ctx_rc) = rand_ctx {
+                // Always evaluate arguments first to preserve side effects.
+                let arg_values: Result<Vec<Value>, CPSError> = arguments
+                    .iter()
+                    .map(|arg| self.evaluate_expr(arg))
+                    .collect();
+                let arg_values = arg_values?;
+
                 let maybe_logged = {
                     let ctx = ctx_rc.borrow();
                     if ctx.rand_pos < ctx.rand_log.len() {
@@ -1737,12 +1767,6 @@ impl Interpreter {
                     ctx_rc.borrow_mut().rand_pos += 1;
                     return Ok(val);
                 }
-
-                let arg_values: Result<Vec<Value>, CPSError> = arguments
-                    .iter()
-                    .map(|arg| self.evaluate_expr(arg))
-                    .collect();
-                let arg_values = arg_values?;
                 let value = match crate::Inter::builtins::call_builtin(identifier.clone(), &arg_values)? {
                     Some(v) => v,
                     None => Value::Boolean(false),
