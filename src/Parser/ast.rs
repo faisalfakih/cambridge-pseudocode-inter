@@ -85,6 +85,21 @@ pub enum Stmt {
     CloseFile { filename: Box<Expr> },
     ReadFile { filename: Box<Expr>, target: Box<Expr> },
     WriteFile { filename: Box<Expr>, value: Box<Expr> },
+    TypeDef { type_definition: TypeDefinition },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDefinition {
+    Enumerated { name: String, values: Vec<String> }, // TYPE Season = (Spring, Summer, Autumn, Winter)
+    Pointer { name: String, points_to: Box<Type> }, // TYPE TypePointer = ^Type
+    // TYPE StudentRecord
+    //    DECLARE LastName : STRING
+    //    ...
+    // ENDTYPE
+    Record { name: String, fields: Vec<(String, Box<Type>)> }, 
+    // TYPE LetterSet = SET OF CHAR
+    // DEFINE Vowels ('A','E','I','O','U') : LetterSet
+    Set { name: String, base_type: Box<Type> }, 
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -323,6 +338,28 @@ impl Stmt {
             }
             Stmt::WriteFile { filename, value } => {
                 format!("{}WRITEFILE {} FROM {}", indent_str, filename.to_prefix(), value.to_prefix())
+            }
+            Stmt::TypeDef { type_definition } => {
+                match type_definition {
+                    TypeDefinition::Enumerated { name, values } => {
+                        let vals = values.join(", ");
+                        format!("{}TYPE {} = ({})", indent_str, name, vals)
+                    }
+                    TypeDefinition::Pointer { name, points_to } => {
+                        format!("{}TYPE {} = ^{:?}", indent_str, name, points_to)
+                    }
+                    TypeDefinition::Record { name, fields } => {
+                        let mut result = format!("{}TYPE {} = RECORD\n", indent_str, name);
+                        for (field_name, field_type) in fields {
+                            result.push_str(&format!("{}  {}: {:?};\n", indent_str, field_name, field_type));
+                        }
+                        result.push_str(&format!("{}ENDRECORD", indent_str));
+                        result
+                    }
+                    TypeDefinition::Set { name, base_type } => {
+                        format!("{}TYPE {} = SET OF {:?}", indent_str, name, base_type)
+                    }
+                }
             }
         }
     }

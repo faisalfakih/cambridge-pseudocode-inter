@@ -60,6 +60,7 @@ pub enum TokenType {
     Return, 
     Returns,
     Seek,
+    Set,
     Step,
     String,
     Super,
@@ -202,6 +203,7 @@ impl Lexer {
 
             // Keywords S-U
             ("SEEK".to_string(), TokenType::Seek),
+            ("SET".to_string(), TokenType::Set),
             ("STEP".to_string(), TokenType::Step),
             ("STRING".to_string(), TokenType::String),
             ("SUPER".to_string(), TokenType::Super),

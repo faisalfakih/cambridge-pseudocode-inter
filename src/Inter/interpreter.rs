@@ -285,6 +285,7 @@ impl Interpreter {
                 });
             }
             Stmt::Constant { identifier, value } => self.evaluate_constant(identifier, value),
+            Stmt::TypeDef { type_definition } => todo!(),
             // _ => {
             //     return Err(CPSError {
             //         error_type: ErrorType::Runtime,
