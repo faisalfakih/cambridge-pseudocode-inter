@@ -8,6 +8,15 @@ use crate::Parser::ast::{BlockStmt, Expr, FileMode};
 
 
 
+/// Discriminates which kind of user-defined type a `Type::CustomType` refers to.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CustomTypeKind {
+    Named(String), 
+    Pointer,
+    Record,
+    Set,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Integer,
@@ -17,8 +26,7 @@ pub enum Type {
     Char,
     Function,
     Array(ArrayType),
-    // Record(String), 
-    // Enum(String),
+    CustomType(CustomTypeKind),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,11 +48,63 @@ pub enum Value {
     Array { array: Vec<Value>, lower_bound: usize, bounds_2d: Option<(usize, usize)> }, 
     Identifier(String),
     Function(Function),
-    // Record(HashMap<String, Value>),
-    // Enum { type_name: String, variant: String },
-    // Null,  
+    Enumarated(String, String), // (type_name, variant_name) e.g. ("Season", "Spring")
+    Pointer(usize), // memory address in the heap
+    Record(HashMap<String, Value>),
+    Set(HashSet<Value>),
 }
 
+
+// f64, HashMap, and BlockStmt don't implement Eq, so we assert it manually.
+// NaN == NaN is treated as true for interpreter purposes.
+impl Eq for Value {}
+impl Eq for Function {}
+
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Value::Integer(i) => i.hash(state),
+            Value::Real(f) => f.to_bits().hash(state),
+            Value::String(s) => s.hash(state),
+            Value::Boolean(b) => b.hash(state),
+            Value::Char(c) => c.hash(state),
+            Value::Array { array, lower_bound, bounds_2d } => {
+                array.hash(state);
+                lower_bound.hash(state);
+                bounds_2d.hash(state);
+            }
+            Value::Identifier(s) => s.hash(state),
+            Value::Function(f) => {
+                for (name, _) in &f.parameters {
+                    name.hash(state);
+                }
+                f.return_type.is_some().hash(state);
+            }
+            Value::Enumarated(type_name, variant) => { type_name.hash(state); variant.hash(state); }
+            Value::Pointer(p) => p.hash(state),
+            Value::Record(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                for key in keys {
+                    key.hash(state);
+                    map[key].hash(state);
+                }
+            }
+            Value::Set(set) => {
+                use std::hash::Hasher;
+                use std::collections::hash_map::DefaultHasher;
+                // XOR individual hashes for order-independence
+                let combined = set.iter().fold(0u64, |acc, v| {
+                    let mut h = DefaultHasher::new();
+                    v.hash(&mut h);
+                    acc ^ h.finish()
+                });
+                combined.hash(state);
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct CloneableFile(File);
@@ -656,6 +716,10 @@ impl Environment {
                             }
                             Value::Identifier(_) => Type::String,
                             Value::Function(_) => Type::Function,
+                            Value::Enumarated(type_name, _) => Type::CustomType(CustomTypeKind::Named(type_name.clone())),
+                            Value::Pointer(_) => Type::CustomType(CustomTypeKind::Pointer),
+                            Value::Record(_) => Type::CustomType(CustomTypeKind::Record),
+                            Value::Set(_) => Type::CustomType(CustomTypeKind::Set),
                         }
                     } else {
                         return Err(CPSError {
@@ -675,6 +739,10 @@ impl Environment {
                 },
                 Value::Identifier(_) => Type::String,
                 Value::Function(_) => Type::Function,
+                Value::Enumarated(type_name, _) => Type::CustomType(CustomTypeKind::Named(type_name)),
+                Value::Pointer(_) => Type::CustomType(CustomTypeKind::Pointer),
+                Value::Record(_) => Type::CustomType(CustomTypeKind::Record),
+                Value::Set(_) => Type::CustomType(CustomTypeKind::Set),
             };
             return Ok(var_type);
         }

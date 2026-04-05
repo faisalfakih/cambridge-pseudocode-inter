@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::Inter::cps::{ArrayType, Type, Value};
+use crate::Inter::cps::{ArrayType, CustomTypeKind, Type, Value};
 use crate::Lexer::{lexer::Token, lexer::TokenType};
 use crate::errortype::{CPSError, ErrorType};
 use crate::Parser::ast::{BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, TypeDefinition};
@@ -1059,9 +1059,11 @@ impl Parser {
             TokenType::Char => Type::Char,
             TokenType::Boolean => Type::Boolean, 
             TokenType::Array => self.parse_array_type()?,
+            TokenType::Identifier => Type::CustomType(CustomTypeKind::Named(type_token.lexeme.clone())),
             _ => {
-                return Err(CPSError { error_type: ErrorType::Syntax, 
-                    message: "Expected a valid data type after the colon".to_string(), hint: None, 
+                return Err(CPSError { error_type: ErrorType::Syntax,
+                    message: format!("'{}' is not a valid data type", type_token.lexeme),
+                    hint: Some("Built-in types are INTEGER, REAL, STRING, BOOLEAN, CHAR. For a custom type, make sure it is defined with TYPE before use.".to_string()),
                     line: type_token.line, column: type_token.column, source: Some(self.source.clone())
                 });
             }

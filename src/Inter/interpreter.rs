@@ -7,9 +7,9 @@ use std::{cell::RefCell, rc::Rc};
 use crate::Inter::web::{WebContext, WebEvent};
 
 use crate::errortype::{CPSError, ErrorType};
-use crate::Inter::cps::{ArrayType, Environment, Function, Type, Value};
+use crate::Inter::cps::{ArrayType, CustomTypeKind, Environment, Function, Type, Value};
 use crate::Lexer::lexer::TokenType;
-use crate::Parser::ast::{Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, Stmt};
+use crate::Parser::ast::{Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, Stmt, TypeDefinition};
 use crate::Parser::parser::ast_to_expr;
 
 const BUILTIN_FUNCTIONS: &[&str] = &[
@@ -53,6 +53,9 @@ pub struct ReplayContext {
 #[derive(Debug)]
 pub struct Interpreter {
     current_env: Rc<RefCell<Environment>>,
+    /// Maps user-defined type names (from TYPE statements) to their definitions.
+    /// Populated at runtime as TypeDef statements are evaluated.
+    type_registry: HashMap<String, TypeDefinition>,
     /// Thread+channel bridge for the server-side web mode (non-WASM only).
     #[cfg(not(target_arch = "wasm32"))]
     web_ctx: Option<WebContext>,
@@ -64,6 +67,7 @@ impl Interpreter {
     pub fn new() -> Self {
         Interpreter {
             current_env: Environment::new_global(),
+            type_registry: HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             web_ctx: None,
             replay_ctx: None,
@@ -76,6 +80,7 @@ impl Interpreter {
     pub fn new_web(ctx: WebContext) -> Self {
         Interpreter {
             current_env: Environment::new_global(),
+            type_registry: HashMap::new(),
             web_ctx: Some(ctx),
             replay_ctx: None,
         }
@@ -84,6 +89,7 @@ impl Interpreter {
     pub fn new_replay(ctx: Rc<RefCell<ReplayContext>>) -> Self {
         Interpreter {
             current_env: Environment::new_global(),
+            type_registry: HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             web_ctx: None,
             replay_ctx: Some(ctx),
@@ -285,7 +291,25 @@ impl Interpreter {
                 });
             }
             Stmt::Constant { identifier, value } => self.evaluate_constant(identifier, value),
-            Stmt::TypeDef { type_definition } => todo!(),
+            Stmt::TypeDef { type_definition } => {
+                let name = match type_definition {
+                    TypeDefinition::Enumerated { name, .. } => name,
+                    TypeDefinition::Pointer { name, .. } => name,
+                    TypeDefinition::Record { name, .. } => name,
+                    TypeDefinition::Set { name, .. } => name,
+                };
+                self.type_registry.insert(name.clone(), type_definition.clone());
+                // each variant of an enum type is stored as a constant with the value Value::Enumerated(type_name, variant_name)
+                if let TypeDefinition::Enumerated { name: type_name, values } = type_definition { 
+                    for variant in values {
+                        self.current_env.borrow_mut().declare_constant(
+                            variant,
+                            &Value::Enumarated(type_name.clone(), variant.clone()),
+                        )?;
+                    }
+                }
+                Ok(())
+            },
             // _ => {
             //     return Err(CPSError {
             //         error_type: ErrorType::Runtime,
@@ -570,6 +594,10 @@ impl Interpreter {
                 column: 0,
                 source: None,
             }),
+            Value::Enumarated(type_name, _) => Ok(Type::CustomType(CustomTypeKind::Named(type_name.clone()))),
+            Value::Pointer(_) => Ok(Type::CustomType(CustomTypeKind::Pointer)),
+            Value::Record(_) => Ok(Type::CustomType(CustomTypeKind::Record)),
+            Value::Set(_) => Ok(Type::CustomType(CustomTypeKind::Set)),
         }
     }
 
@@ -1684,6 +1712,36 @@ impl Interpreter {
                     bounds_2d,
                 }
             },
+            Type::CustomType(CustomTypeKind::Named(name)) => {
+                let typedef = self.type_registry.get(name).cloned().ok_or_else(|| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Unknown type '{}'", name),
+                    hint: Some(format!("Make sure '{}' is defined with a TYPE statement before declaring variables of that type.", name)),
+                    line: 0, column: 0, source: None,
+                })?;
+                match typedef {
+                    TypeDefinition::Enumerated { name, .. } => Value::Enumarated(name.clone(), String::new()),
+                    TypeDefinition::Record { fields, .. } => {
+                        let mut map = std::collections::HashMap::new();
+                        for (field_name, field_type) in &fields {
+                            let default = match field_type.as_ref() {
+                                Type::Integer => Value::Integer(0),
+                                Type::Real => Value::Real(0.0),
+                                Type::String => Value::String(String::new()),
+                                Type::Boolean => Value::Boolean(false),
+                                Type::Char => Value::Char('\0'),
+                                Type::CustomType(CustomTypeKind::Named(n)) => Value::Enumarated(n.clone(), String::new()),
+                                Type::CustomType(_) => Value::Enumarated(String::new(), String::new()),
+                                _ => Value::String(String::new()),
+                            };
+                            map.insert(field_name.clone(), default);
+                        }
+                        Value::Record(map)
+                    }
+                    TypeDefinition::Pointer { .. } => Value::Pointer(0),
+                    TypeDefinition::Set { .. } => Value::Set(std::collections::HashSet::new()),
+                }
+            }
             _ => {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
