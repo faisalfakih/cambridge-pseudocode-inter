@@ -258,7 +258,8 @@ impl Interpreter {
         match statement {
             Stmt::Output { target } => self.evaluate_output_stmt(target),
             Stmt::Decleration { identifier, type_ } => self.evaluate_declaration_stmt(identifier, type_),
-            Stmt::Assignment { identifier, array_index, value } => self.evaluate_assignment_stmt(identifier, value, array_index),
+            Stmt::Assignment { identifier, array_index, field, value } => self.evaluate_assignment_stmt(identifier, value, array_index, field),
+            Stmt::DerefAssignment { pointer, value } => self.evaluate_deref_assignment(pointer, value),
             Stmt::Input { identifier } => self.evaluate_input_stmt(identifier),
             Stmt::If { condition, then_branch, else_branch } => self.evaluate_if_stmt(condition, then_branch, else_branch),
             Stmt::Case { identifier, cases, otherwise } => self.evaluate_case_stmt(identifier, cases, otherwise),
@@ -324,7 +325,7 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_assignment_stmt(&mut self, identifier: &String, value: &Ast, array_index: &Option<(Box<Expr>, Option<Box<Expr>>)>) -> Result<(), CPSError> {
+    fn evaluate_assignment_stmt(&mut self, identifier: &String, value: &Ast, array_index: &Option<(Box<Expr>, Option<Box<Expr>>)>, field: &Option<String>) -> Result<(), CPSError> {
         let value_expression = match value {
             Ast::Expression(expr) => expr,
             Ast::Identifier(name) => {
@@ -357,6 +358,37 @@ impl Interpreter {
 
 
         let mut val = self.evaluate_expr(value_expression)?;
+
+        if field.is_some() && array_index.is_none() {
+            let field_name = field.as_ref().unwrap();
+            let current = self.current_env.borrow().get(identifier).ok_or_else(|| CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Undefined variable '{}'", identifier),
+                hint: None, line: 0, column: 0, source: None,
+            })?;
+            match current {
+                Value::Record(mut map) => {
+                    if !map.contains_key(field_name) {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Record '{}' has no field '{}'", identifier, field_name),
+                            hint: None, line: 0, column: 0, source: None,
+                        });
+                    }
+                    map.insert(field_name.clone(), val);
+                    return self.current_env.borrow_mut().set(identifier, Value::Record(map)).map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to update field '{}' on '{}': {}", field_name, identifier, e.message),
+                        hint: None, line: 0, column: 0, source: None,
+                    });
+                }
+                _ => return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("'{}' is not a record", identifier),
+                    hint: None, line: 0, column: 0, source: None,
+                }),
+            }
+        }
 
         let expected_type = self.current_env.borrow_mut().get_type(identifier)?;
 
@@ -489,35 +521,115 @@ impl Interpreter {
                     None => None,
                 };
 
-                // now set the array element at index
-                self.current_env
-                    .borrow_mut()
-                    .set_array_element(identifier, index_int as usize, column_usize, converted_val)
-                    .map_err(|e| CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Failed to assign value to array element '{}[{}]': {}", identifier, index_int, e.message),
-                        hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
-                    })
+                if let Some(field_name) = field {
+                    // Form[i].Field <- value: get the element, mutate its field, write it back
+                    let mut elem = self.current_env.borrow_mut()
+                        .get_array_element(identifier, index_int as usize, column_usize)?;
+                    match &mut elem {
+                        Value::Record(map) => {
+                            if !map.contains_key(field_name) {
+                                return Err(CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Record element of '{}' has no field '{}'", identifier, field_name),
+                                    hint: None, line: 0, column: 0, source: None,
+                                });
+                            }
+                            map.insert(field_name.clone(), converted_val);
+                        }
+                        _ => return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Array element of '{}' is not a record", identifier),
+                            hint: None, line: 0, column: 0, source: None,
+                        }),
+                    }
+                    self.current_env.borrow_mut()
+                        .set_array_element(identifier, index_int as usize, column_usize, elem)
+                        .map_err(|e| CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Failed to update field '{}' on '{}[{}]': {}", field_name, identifier, index_int, e.message),
+                            hint: None, line: 0, column: 0, source: None,
+                        })
+                } else {
+                    self.current_env
+                        .borrow_mut()
+                        .set_array_element(identifier, index_int as usize, column_usize, converted_val)
+                        .map_err(|e| CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Failed to assign value to array element '{}[{}]': {}", identifier, index_int, e.message),
+                            hint: None, line: 0, column: 0, source: None,
+                        })
+                }
             }
             None => {
-            self.current_env
-                .borrow_mut()
-                .set(identifier, converted_val)
-                .map_err(|e| CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Failed to assign value to '{}': {}", identifier, e.message),
-                    hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
-                })
+                // Record field write: Pupil1.LastName <- "Johnson"
+                if let Some(field_name) = field {
+                    let current = self.current_env.borrow().get(identifier).ok_or_else(|| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Undefined variable '{}'", identifier),
+                        hint: None, line: 0, column: 0, source: None,
+                    })?;
+                    match current {
+                        Value::Record(mut map) => {
+                            if !map.contains_key(field_name) {
+                                return Err(CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!("Record '{}' has no field '{}'", identifier, field_name),
+                                    hint: None, line: 0, column: 0, source: None,
+                                });
+                            }
+                            map.insert(field_name.clone(), converted_val);
+                            self.current_env.borrow_mut().set(identifier, Value::Record(map)).map_err(|e| CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Failed to update field '{}' on '{}': {}", field_name, identifier, e.message),
+                                hint: None, line: 0, column: 0, source: None,
+                            })
+                        }
+                        _ => Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("'{}' is not a record", identifier),
+                            hint: None, line: 0, column: 0, source: None,
+                        }),
+                    }
+                } else {
+                    self.current_env.borrow_mut().set(identifier, converted_val).map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to assign value to '{}': {}", identifier, e.message),
+                        hint: None, line: 0, column: 0, source: None,
+                    })
+                }
             }
         }
+    }
 
-        
+    fn evaluate_deref_assignment(&mut self, pointer: &String, value: &Ast) -> Result<(), CPSError> {
+        let val = match value {
+            Ast::Expression(expr) => self.evaluate_expr(expr)?,
+            Ast::Identifier(name) => self.current_env.borrow().get(name).ok_or_else(|| CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Undefined identifier '{}'", name),
+                hint: None, line: 0, column: 0, source: None,
+            })?,
+            _ => return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: "Invalid value in pointer dereference assignment".to_string(),
+                hint: None, line: 0, column: 0, source: None,
+            }),
+        };
+        let addr = match self.current_env.borrow().get(pointer) {
+            Some(Value::Pointer(a)) => a,
+            Some(_) => return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("'{}' is not a pointer", pointer),
+                hint: None, line: 0, column: 0, source: None,
+            }),
+            None => return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Undefined pointer variable '{}'", pointer),
+                hint: None, line: 0, column: 0, source: None,
+            }),
+        };
+        self.current_env.borrow().heap.borrow_mut().insert(addr, val);
+        Ok(())
     }
 
     fn find_actual_type(&self, val: &Value, identifier: &String) -> Result<Type, CPSError> {
@@ -694,6 +806,7 @@ impl Interpreter {
             Value::Real(r) => r.to_string(),
             Value::Boolean(b) => b.to_string(),
             Value::Char(c) => c.to_string(),
+            Value::Enumarated(_, variant) => variant,
             Value::Identifier(id) => match self.current_env.borrow().get(&id) {
                 Some(v) => match v {
                     Value::String(s) => s,
@@ -701,6 +814,7 @@ impl Interpreter {
                     Value::Real(r) => r.to_string(),
                     Value::Boolean(b) => b.to_string(),
                     Value::Char(c) => c.to_string(),
+                    Value::Enumarated(_, variant) => variant,
                     _ => {
                         return Err(CPSError {
                             error_type: ErrorType::Runtime,
@@ -2010,16 +2124,53 @@ impl Interpreter {
                 let is_eof = self.current_env.borrow().is_eof(filename)?;
                 Ok(Value::Boolean(is_eof))
             }
-            // _ => {
-            //     return Err(CPSError {
-            //         error_type: ErrorType::Runtime,
-            //         message: format!("Unsupported expression in interpreter: {:?}", expression),
-            //         hint: None,
-            //         line: 0,
-            //         column: 0,
-            //         source: None,
-            //     });
-            // }
+
+            Expr::FieldAccess { object, field } => {
+                let record_val = self.current_env.borrow().get(object).ok_or_else(|| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Undefined variable '{}'", object),
+                    hint: None, line: 0, column: 0, source: None,
+                })?;
+                match record_val {
+                    Value::Record(map) => map.get(field).cloned().ok_or_else(|| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Record '{}' has no field '{}'", object, field),
+                        hint: None, line: 0, column: 0, source: None,
+                    }),
+                    _ => Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("'{}' is not a record", object),
+                        hint: None, line: 0, column: 0, source: None,
+                    }),
+                }
+            }
+
+            Expr::AddressOf(var_name) => {
+                let address = self.current_env.borrow().bindings.get(var_name).copied().ok_or_else(|| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Undefined variable '{}'", var_name),
+                    hint: None, line: 0, column: 0, source: None,
+                })?;
+                Ok(Value::Pointer(address))
+            }
+
+            Expr::Deref(inner) => {
+                let ptr_val = self.evaluate_expr(inner)?;
+                match ptr_val {
+                    Value::Pointer(addr) => {
+                        self.current_env.borrow().heap.borrow().get(&addr).cloned().ok_or_else(|| CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!("Pointer dereference failed: no value at address {}", addr),
+                            hint: None, line: 0, column: 0, source: None,
+                        })
+                    }
+                    _ => Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: "Cannot dereference a non-pointer value".to_string(),
+                        hint: None, line: 0, column: 0, source: None,
+                    }),
+                }
+            }
         }
     }
 
@@ -2369,6 +2520,16 @@ impl Interpreter {
             (Value::String(l), Value::String(r)) => Ok(Value::Boolean(l == r)),
             (Value::Boolean(l), Value::Boolean(r)) => Ok(Value::Boolean(l == r)),
             (Value::Char(l), Value::Char(r)) => Ok(Value::Boolean(l == r)),
+            (Value::Enumarated(lt, lv), Value::Enumarated(rt, rv)) => {
+                if lt != rt {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Cannot compare values of different enum types: '{}' and '{}'", lt, rt),
+                        hint: None, line: 0, column: 0, source: None,
+                    });
+                }
+                Ok(Value::Boolean(lv == rv))
+            }
             _ => Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Unsupported types for equality comparison: {:?} == {:?}", left, right),
@@ -2387,6 +2548,16 @@ impl Interpreter {
             (Value::String(l), Value::String(r)) => Ok(Value::Boolean(l != r)),
             (Value::Boolean(l), Value::Boolean(r)) => Ok(Value::Boolean(l != r)),
             (Value::Char(l), Value::Char(r)) => Ok(Value::Boolean(l != r)),
+            (Value::Enumarated(lt, lv), Value::Enumarated(rt, rv)) => {
+                if lt != rt {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Cannot compare values of different enum types: '{}' and '{}'", lt, rt),
+                        hint: None, line: 0, column: 0, source: None,
+                    });
+                }
+                Ok(Value::Boolean(lv != rv))
+            }
             _ => Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Unsupported types for inequality comparison: {:?} != {:?}", left, right),
@@ -2504,7 +2675,8 @@ impl Interpreter {
             Value::Real(_) |
             Value::String(_) |
             Value::Boolean(_) |
-            Value::Char(_) => {},
+            Value::Char(_) |
+            Value::Enumarated(_, _) => {},
             Value::Identifier(iden) => {
                 match self.current_env 
                     .borrow()

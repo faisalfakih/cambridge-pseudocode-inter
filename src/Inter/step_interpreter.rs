@@ -56,7 +56,7 @@ pub enum StepEvent {
 
 /// Drives a pseudocode program one event at a time.
 pub struct StepInterpreter {
-    /// Pre-parsed AST — shared by all replay runs without cloning.
+    /// Pre-parsed AST - shared by all replay runs without cloning.
     ast: Vec<Ast>,
     /// Inputs supplied by the user, in order.
     input_log: Vec<String>,
@@ -126,7 +126,7 @@ impl StepInterpreter {
         match result {
             Ok(()) => {
                 // Program ran to completion without producing another output
-                // or hitting an un-served input — we're done.
+                // or hitting an un-served input - we're done.
                 self.done = true;
                 StepEvent::Done
             }

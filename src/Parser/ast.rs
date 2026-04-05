@@ -48,8 +48,14 @@ pub enum Expr {
     Binary(BinaryExpr),
     Literal(Value),
     Call { name: String, arguments: Vec<Expr> },
-    ArrayAccess { name: String, index: Box<Expr>, col: Option<Box<Expr>> }, // col for 2D arrays, the index exists for both 1D and 2D arrays but would be the row in a 2d array     
+    ArrayAccess { name: String, index: Box<Expr>, col: Option<Box<Expr>> }, // col for 2D arrays, the index exists for both 1D and 2D arrays but would be the row in a 2d array
     EOF { filename: String },
+    /// `Pupil1.LastName`: read a field from a record variable
+    FieldAccess { object: String, field: String },
+    /// `^Y`:  take the heap address of variable Y (pointer assignment RHS)
+    AddressOf(String),
+    /// `X^`:  read the value stored at the address X holds (pointer dereference)
+    Deref(Box<Expr>),
 }
 
 
@@ -62,7 +68,9 @@ pub enum Stmt {
     While { condition: Box<Expr>, body: BlockStmt },
     Repeat { body: BlockStmt, until: Box<Expr> },
     For { identifier: String, start: Box<Expr>, end: Box<Expr>, body: BlockStmt },
-    Assignment { identifier: String, array_index: Option<(Box<Expr>, Option<Box<Expr>>)>, value: Box<Ast> },
+    Assignment { identifier: String, array_index: Option<(Box<Expr>, Option<Box<Expr>>)>, field: Option<String>, value: Box<Ast> },
+    /// `X^ <- value` - write through a pointer (dereference on the LHS)
+    DerefAssignment { pointer: String, value: Box<Ast> },
     Constant { identifier: String, value: Value },
     Decleration { identifier: String, type_: Type},
     Input { identifier: Box<Expr> }, 
@@ -181,6 +189,9 @@ impl Expr {
                 }
             }
             Expr::EOF { filename } => format!("EOF({})", filename),
+            Expr::FieldAccess { object, field } => format!("{}.{}", object, field),
+            Expr::AddressOf(name) => format!("^{}", name),
+            Expr::Deref(expr) => format!("{}^", expr.to_prefix()),
         }
     }
 }
@@ -259,16 +270,19 @@ impl Stmt {
                 result.push_str(&format!("{}ENDFOR", indent_str));
                 result
             }
-            Stmt::Assignment { identifier, array_index, value } => {
-                if let Some((index_expr, col_expr)) = array_index {
-                    if let Some(col) = col_expr {
-                        format!("{}{}[{}, {}] := {}", indent_str, identifier, index_expr.to_prefix(), col.to_prefix(), value.to_prefix())
-                    } else {
-                        format!("{}{}[{}] := {}", indent_str, identifier, index_expr.to_prefix(), value.to_prefix())
-                    }
-                } else {
-                    format!("{}{} := {}", indent_str, identifier, value.to_prefix())
-                }
+            Stmt::Assignment { identifier, array_index, field, value } => {
+                let lhs = match (array_index, field) {
+                    (Some((index_expr, Some(col_expr))), Some(f)) => format!("{}[{}, {}].{}", identifier, index_expr.to_prefix(), col_expr.to_prefix(), f),
+                    (Some((index_expr, None)), Some(f)) => format!("{}[{}].{}", identifier, index_expr.to_prefix(), f),
+                    (Some((index_expr, Some(col_expr))), None) => format!("{}[{}, {}]", identifier, index_expr.to_prefix(), col_expr.to_prefix()),
+                    (Some((index_expr, None)), None) => format!("{}[{}]", identifier, index_expr.to_prefix()),
+                    (None, Some(f)) => format!("{}.{}", identifier, f),
+                    (None, None) => identifier.clone(),
+                };
+                format!("{}{} <- {}", indent_str, lhs, value.to_prefix())
+            }
+            Stmt::DerefAssignment { pointer, value } => {
+                format!("{}{}^ <- {}", indent_str, pointer, value.to_prefix())
             }
             Stmt::Decleration { identifier, type_ } => {
                 format!("{}DECLARE {} : {:?}", indent_str, identifier, type_)

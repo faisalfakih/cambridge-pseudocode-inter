@@ -1,4 +1,4 @@
-//! Cambridge Pseudocode Interpreter — library crate.
+//! Cambridge Pseudocode Interpreter - library crate.
 //!
 //! The `[lib]` target is used by `wasm-pack` to produce the WASM package.
 //! The `[[bin]]` target (`src/main.rs`) provides the `cps` CLI and is

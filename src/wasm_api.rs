@@ -3,7 +3,7 @@
 // NOTE: Please keep that in mind when writing/reviewing code in these section
 
 
-//! WASM bindings — compiled only when targeting `wasm32`.
+//! WASM bindings - compiled only when targeting `wasm32`.
 //!
 //! Build with:
 //!   wasm-pack build --target web --out-dir web/pkg

@@ -83,7 +83,6 @@ pub enum TokenType {
     Arrow,
     Asterisk,
     ForwardSlash,
-    Comment,
     Plus,
     LessThan,
     LessEqual,
@@ -99,6 +98,7 @@ pub enum TokenType {
     LSquare,
     RSquare,
     Comma,
+    Dot,
 
     Eof,
 }
@@ -110,7 +110,6 @@ pub struct Token {
     pub token_type: TokenType,
     pub line: usize,
     pub column: usize,
-    error: Option<CPSError>,
 }
 
 impl Token {
@@ -120,7 +119,6 @@ impl Token {
             token_type,
             line,
             column,
-            error: None,
         }
     }
 
@@ -445,6 +443,11 @@ impl Lexer {
                     self.position += 1;
                     self.column += 1;
                     return Ok(Token::new(",".to_string(), TokenType::Comma, self.line, self.column - 1));
+                },
+                '.' => {
+                    self.position += 1;
+                    self.column += 1;
+                    return Ok(Token::new(".".to_string(), TokenType::Dot, self.line, self.column - 1));
                 },
                 '[' => {
                     self.position += 1;

@@ -97,6 +97,16 @@ impl Parser {
         self.operators.contains_key(&token_type)
     }
 
+    /// Returns true if `token_type` can begin a primary expression.
+    /// Used to disambiguate postfix `X^` (dereference) from infix `X ^ expr` (exponentiation).
+    fn is_primary_starter(&self, token_type: TokenType) -> bool {
+        matches!(token_type,
+            TokenType::Identifier | TokenType::NumberLiteral | TokenType::StringLiteral
+            | TokenType::CharLiteral | TokenType::True | TokenType::False
+            | TokenType::Not | TokenType::LParen | TokenType::Caret
+        )
+    }
+
     // parsing logic
     pub fn parse_top_expr(&mut self) -> Result<Ast, CPSError> {
         self.parse_expr(0)
@@ -155,6 +165,22 @@ impl Parser {
                 Ok(Ast::Expression(Expr::Literal(Value::Char(ch))))
             }
 
+            TokenType::Caret => {
+                // prefix ^ - address-of: ^Y
+                self.advance();
+                let var_token = self.advance();
+                if var_token.token_type != TokenType::Identifier {
+                    return Err(CPSError {
+                        error_type: ErrorType::Syntax,
+                        message: "Expected an identifier after '^' (address-of)".to_string(),
+                        hint: Some("Use ^VarName to get the address of a variable".to_string()),
+                        line: var_token.line, column: var_token.column,
+                        source: Some(self.source.clone()),
+                    });
+                }
+                Ok(Ast::Expression(Expr::AddressOf(var_token.lexeme)))
+            }
+
             TokenType::Identifier => {
                 let name = token.lexeme.clone();
                 self.advance();
@@ -189,7 +215,61 @@ impl Parser {
                 } else if self.peek(0).token_type == TokenType::LParen {
                     self.parse_function_call_expr(name)
                 } else if self.peek(0).token_type == TokenType::LSquare {
-                    self.parse_array_access_expr(name)
+                    let arr = self.parse_array_access_expr(name)?;
+                    // array element field access: Arr[i].Field
+                    if self.peek(0).token_type == TokenType::Dot {
+                        self.advance(); // consume '.'
+                        let field_token = self.advance();
+                        if field_token.token_type != TokenType::Identifier {
+                            return Err(CPSError {
+                                error_type: ErrorType::Syntax,
+                                message: "Expected a field name after '.'".to_string(),
+                                hint: None,
+                                line: field_token.line, column: field_token.column,
+                                source: Some(self.source.clone()),
+                            });
+                        }
+                        if let Ast::Expression(Expr::ArrayAccess { name: arr_name, index, col }) = arr {
+                            return Ok(Ast::Expression(Expr::ArrayAccess {
+                                name: format!("{}.{}", arr_name, field_token.lexeme),
+                                index,
+                                col,
+                            }));
+                        }
+                        unreachable!()
+                    }
+                    // postfix ^ dereference after array access
+                    if self.peek(0).token_type == TokenType::Caret
+                        && (!self.is_primary_starter(self.peek(1).token_type)
+                            || self.peek(1).line > self.peek(0).line)
+                    {
+                        self.advance();
+                        return Ok(Ast::Expression(Expr::Deref(Box::new(ast_to_expr(arr)?))));
+                    }
+                    Ok(arr)
+                } else if self.peek(0).token_type == TokenType::Dot {
+                    // field access expression: Pupil1.LastName
+                    self.advance(); // consume '.'
+                    let field_token = self.advance();
+                    if field_token.token_type != TokenType::Identifier {
+                        return Err(CPSError {
+                            error_type: ErrorType::Syntax,
+                            message: "Expected a field name after '.'".to_string(),
+                            hint: None,
+                            line: field_token.line, column: field_token.column,
+                            source: Some(self.source.clone()),
+                        });
+                    }
+                    Ok(Ast::Expression(Expr::FieldAccess { object: name, field: field_token.lexeme }))
+                } else if self.peek(0).token_type == TokenType::Caret
+                    && (!self.is_primary_starter(self.peek(1).token_type)
+                        || self.peek(1).line > self.peek(0).line)
+                {
+                    // postfix ^ dereference: X^
+                    // Disambiguated from infix exponentiation (x ^ 2) by checking that either
+                    // the token after ^ cannot start an expression, or it is on a later line.
+                    self.advance(); // consume '^'
+                    Ok(Ast::Expression(Expr::Deref(Box::new(Expr::Literal(Value::Identifier(name))))))
                 } else {
                     Ok(Ast::Identifier(name))
                 }
@@ -1119,36 +1199,88 @@ impl Parser {
     fn parse_assignment(&mut self) -> Result<Ast, CPSError> {
         let identifier = self.advance();
 
-        let assign_token = self.peek(0);
-        let array_index = None;
-        if assign_token.token_type != TokenType::Arrow && assign_token.token_type != TokenType::LSquare {
-            return Err(CPSError { error_type: ErrorType::Syntax, 
-                message: "Expected '<-' in assignment".to_string(), hint: None, 
-                line: assign_token.line, column: assign_token.column, source: Some(self.source.clone()) });
-        } 
-        if assign_token.token_type == TokenType::LSquare {
-            // array access
-            let array_access = self.parse_array_access_expr(identifier.lexeme.clone())?;
-            if let Ast::Expression(Expr::ArrayAccess { name: _, index, col }) = array_access {
-                // consume '<-'
-                let assign_token = self.advance();
-                if assign_token.token_type != TokenType::Arrow {
-                    return Err(CPSError { error_type: ErrorType::Syntax, 
-                        message: "Expected '<-' in assignment".to_string(), hint: None, 
-                        line: assign_token.line, column: assign_token.column, source: Some(self.source.clone()) });
-                }
-
-                let value = self.parse_expr(0)?;
-
-                return Ok(Ast::Stmt(Stmt::Assignment { identifier: identifier.lexeme, array_index: Some((Box::new(*index), col)), value: Box::new(value) }));
-            }         
+        // X^ <- value  (dereference on LHS)
+        if self.peek(0).token_type == TokenType::Caret {
+            self.advance(); // consume '^'
+            let arrow = self.advance();
+            if arrow.token_type != TokenType::Arrow {
+                return Err(CPSError { error_type: ErrorType::Syntax,
+                    message: "Expected '<-' after '^' in pointer dereference assignment".to_string(), hint: None,
+                    line: arrow.line, column: arrow.column, source: Some(self.source.clone()) });
+            }
+            let value = self.parse_expr(0)?;
+            return Ok(Ast::Stmt(Stmt::DerefAssignment { pointer: identifier.lexeme, value: Box::new(value) }));
         }
 
+        // Arr[i].Field <- value  or  Arr[i] <- value
+        if self.peek(0).token_type == TokenType::LSquare {
+            let array_access = self.parse_array_access_expr(identifier.lexeme.clone())?;
+            if let Ast::Expression(Expr::ArrayAccess { name: _, index, col }) = array_access {
+                // optional .Field after the index
+                let field = if self.peek(0).token_type == TokenType::Dot {
+                    self.advance(); // consume '.'
+                    let field_token = self.advance();
+                    if field_token.token_type != TokenType::Identifier {
+                        return Err(CPSError { error_type: ErrorType::Syntax,
+                            message: "Expected a field name after '.'".to_string(), hint: None,
+                            line: field_token.line, column: field_token.column, source: Some(self.source.clone()) });
+                    }
+                    Some(field_token.lexeme)
+                } else {
+                    None
+                };
+
+                let arrow = self.advance();
+                if arrow.token_type != TokenType::Arrow {
+                    return Err(CPSError { error_type: ErrorType::Syntax,
+                        message: "Expected '<-' in assignment".to_string(), hint: None,
+                        line: arrow.line, column: arrow.column, source: Some(self.source.clone()) });
+                }
+                let value = self.parse_expr(0)?;
+                return Ok(Ast::Stmt(Stmt::Assignment {
+                    identifier: identifier.lexeme,
+                    array_index: Some((Box::new(*index), col)),
+                    field,
+                    value: Box::new(value),
+                }));
+            }
+        }
+
+        // Pupil1.Field <- value
+        if self.peek(0).token_type == TokenType::Dot {
+            self.advance(); // consume '.'
+            let field_token = self.advance();
+            if field_token.token_type != TokenType::Identifier {
+                return Err(CPSError { error_type: ErrorType::Syntax,
+                    message: "Expected a field name after '.'".to_string(), hint: None,
+                    line: field_token.line, column: field_token.column, source: Some(self.source.clone()) });
+            }
+            let arrow = self.advance();
+            if arrow.token_type != TokenType::Arrow {
+                return Err(CPSError { error_type: ErrorType::Syntax,
+                    message: "Expected '<-' in assignment".to_string(), hint: None,
+                    line: arrow.line, column: arrow.column, source: Some(self.source.clone()) });
+            }
+            let value = self.parse_expr(0)?;
+            return Ok(Ast::Stmt(Stmt::Assignment {
+                identifier: identifier.lexeme,
+                array_index: None,
+                field: Some(field_token.lexeme),
+                value: Box::new(value),
+            }));
+        }
+
+        // plain  X <- value
+        let arrow = self.peek(0);
+        if arrow.token_type != TokenType::Arrow {
+            return Err(CPSError { error_type: ErrorType::Syntax,
+                message: "Expected '<-' in assignment".to_string(), hint: None,
+                line: arrow.line, column: arrow.column, source: Some(self.source.clone()) });
+        }
         self.advance();
 
         let value = self.parse_expr(0)?;
-
-        Ok(Ast::Stmt(Stmt::Assignment { identifier: identifier.lexeme, array_index, value: Box::new(value) }))
+        Ok(Ast::Stmt(Stmt::Assignment { identifier: identifier.lexeme, array_index: None, field: None, value: Box::new(value) }))
     }
 
     fn parse_procedure(&mut self) -> Result<Ast, CPSError> {
@@ -1727,12 +1859,13 @@ impl Parser {
             });
         }
 
-        let next_token = self.advance();
+        let cur_token = self.peek(0);
         // if the next token is a '=', it's either a enumerated, pointer or set type declaration. 
         // otherwise, it's a record type declaration
 
-        if next_token.token_type == TokenType::Equal {
+        if cur_token.token_type == TokenType::Equal {
             // enumerated, pointer or set type declaration
+            self.advance(); // consume '='
             
             // if the next token is a '(', it's an enumerated type declaration
             let next_token = self.advance();
@@ -1762,6 +1895,18 @@ impl Parser {
                         } else {
                             break;
                         }
+                    }
+                    // consume the ')' after the enum values
+                    let close_paren = self.advance();
+                    if close_paren.token_type != TokenType::RParen { // <- shouldn't happen, but leave it here just incase
+                        return Err(CPSError {
+                            error_type: ErrorType::Syntax,
+                            message: "Expected ')' after enumerated type values".to_string(),
+                            hint: Some("Enumerated type declarations must specify their values as identifiers enclosed in parentheses".to_string()),
+                            line: close_paren.line,
+                            column: close_paren.column,
+                            source: Some(self.source.clone()),
+                        });
                     }
 
                     return Ok(Ast::Stmt(Stmt::TypeDef {
