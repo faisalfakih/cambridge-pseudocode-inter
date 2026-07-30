@@ -1,8 +1,8 @@
 # Cambridge Pseudocode Interpreter
 
-![Stars](https://img.shields.io/github/stars/faisalfakih/cambridge-psudocode-inter)
-![Version](https://img.shields.io/github/v/release/faisalfakih/cambridge-psudocode-inter)
-![License](https://img.shields.io/github/license/faisalfakih/cambridge-psudocode-inter)
+![Stars](https://img.shields.io/github/stars/faisalfakih/cambridge-pseudocode-inter)
+![Version](https://img.shields.io/github/v/release/faisalfakih/cambridge-pseudocode-inter)
+![License](https://img.shields.io/github/license/faisalfakih/cambridge-pseudocode-inter)
 
 A Rust-based interpreter for Cambridge International AS & A Level Computer Science (9618) pseudocode specification. This project implements a complete interpreter that parses and executes pseudocode in accordance with the Cambridge syllabus standards.
 
@@ -21,12 +21,12 @@ https://www.cambridge-pseudocode.com/
 
 ### Linux/macOS
 ```bash
-curl -s https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install/install.sh | bash
+curl -s https://raw.githubusercontent.com/faisalfakih/cambridge-pseudocode-inter/main/install/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 ```powershell
-irm https://raw.githubusercontent.com/faisalfakih/cambridge-psudocode-inter/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/faisalfakih/cambridge-pseudocode-inter/main/install/install.ps1 | iex
 ```
 
 After installation, the `cps` command will be available globally:
@@ -41,8 +41,8 @@ Simply run the install script again — it will always pull the latest release.
 
 ### Build from source
 ```bash
-git clone https://github.com/faisalfakih/cambridge-psudocode-inter
-cd cambridge-psudocode-inter
+git clone https://github.com/faisalfakih/cambridge-pseudocode-inter
+cd cambridge-pseudocode-inter
 cargo build --release
 ./target/release/cps yourfile.cps
 ```

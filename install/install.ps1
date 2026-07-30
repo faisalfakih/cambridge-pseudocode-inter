@@ -1,4 +1,4 @@
-$REPO = "faisalfakih/cambridge-psudocode-inter"
+$REPO = "faisalfakih/cambridge-pseudocode-inter"
 $BINARY = "cps-windows-x86_64.exe"
 $INSTALL_DIR = "$env:LOCALAPPDATA\cps"
 

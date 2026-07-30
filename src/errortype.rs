@@ -82,7 +82,7 @@ impl std::fmt::Display for CPSError {
 
         write!(f, "\n{}",
             format!("Think this is a bug in the interpreter? Report it: {}",
-                "https://github.com/faisalfakih/cambridge-psudocode-inter/issues".bright_blue().underline()
+                "https://github.com/faisalfakih/cambridge-pseudocode-inter/issues".bright_blue().underline()
             ).dimmed()
         )
     }
