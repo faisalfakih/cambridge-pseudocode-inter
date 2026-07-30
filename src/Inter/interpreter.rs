@@ -21,6 +21,11 @@ const BUILTIN_FUNCTIONS: &[&str] = &[
     "UCASE",
     "INT",
     "RAND",
+    "NUM_TO_STR",
+    "STR_TO_NUM",
+    "IS_NUM",
+    "ASC",
+    "CHR",
 ];
 
 /// A file living in memory (used for file I/O in web / WASM modes, and as the "write log" for replay mode).
