@@ -1356,7 +1356,7 @@ impl Parser {
                 if param_identifier.token_type != TokenType::Identifier {
                     return Err(CPSError {
                         error_type: ErrorType::Syntax,
-                        message: "Expected parameter name in procedure declaration".to_string(),
+                        message: "Expected parameter name in function declaration".to_string(),
                         hint: Some("Procedure parameters must have valid names".to_string()),
                         line: param_identifier.line,
                         column: param_identifier.column,
@@ -1379,7 +1379,7 @@ impl Parser {
             else if param_identifier.token_type != TokenType::Identifier {
                 return Err(CPSError {
                     error_type: ErrorType::Syntax,
-                    message: "Expected parameter name in procedure declaration".to_string(),
+                    message: "Expected parameter name in function declaration".to_string(),
                     hint: Some("Procedure parameters must have valid names".to_string()),
                     line: param_identifier.line,
                     column: param_identifier.column,

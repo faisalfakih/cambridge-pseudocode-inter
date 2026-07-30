@@ -1844,7 +1844,8 @@ impl Interpreter {
                         });
                     }
 
-                    new_env.borrow_mut().define(param_name.to_owned(), arg_value.clone())?;
+                    let converted = convert_values_to_base_type(&arg_value, param_type).unwrap_or(arg_value);
+                    new_env.borrow_mut().define(param_name.to_owned(), converted)?;
                 }
                 PassingValue::ByRef => {
                     let current_arg = &arguments[i];
