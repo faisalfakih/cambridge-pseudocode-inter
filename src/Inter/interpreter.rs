@@ -9,7 +9,7 @@ use crate::Inter::web::{WebContext, WebEvent};
 use crate::errortype::{CPSError, ErrorType};
 use crate::Inter::cps::{ArrayType, Environment, Function, Type, Value};
 use crate::Lexer::lexer::TokenType;
-use crate::Parser::ast::{Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, Stmt};
+use crate::Parser::ast::{Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, Stmt, PassingValue};
 use crate::Parser::parser::ast_to_expr;
 
 const BUILTIN_FUNCTIONS: &[&str] = &[
@@ -1713,7 +1713,7 @@ impl Interpreter {
 
 
 
-    fn evaluate_procedure(&mut self, identifier: &String, parameters: &Vec<(String, Type)>, body: &BlockStmt) -> Result<(), CPSError> {
+    fn evaluate_procedure(&mut self, identifier: &String, parameters: &Vec<(String, Type, PassingValue)>, body: &BlockStmt) -> Result<(), CPSError> {
         // self.evaluate_declaration_stmt(identifier, &Type::Function)?;
 
         // first check if procedure is a builtin
@@ -1825,23 +1825,108 @@ impl Interpreter {
 
         let new_env = Environment::new_child(Rc::clone(&self.current_env));
 
-        for (i, (param_name, param_type)) in func_value.parameters.iter().enumerate() {
-            let arg_value = self.evaluate_expr(&arguments[i])?;
+        for (i, (param_name, param_type, passing_value)) in func_value.parameters.iter().enumerate() {
+            match passing_value {
+                PassingValue::ByVal => {
+                    let arg_value = self.evaluate_expr(&arguments[i])?;
 
-            if !check_if_type_can_be_converted(&arg_value, param_type) {
-                return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!(
-                        "Type mismatch for parameter '{}': expected {:?}, got {:?}",
-                        param_name, param_type, arg_value
-                    ),
-                    hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
-                });
+                    if !check_if_type_can_be_converted(&arg_value, param_type) {
+                        return Err(CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: format!(
+                                "Type mismatch for parameter '{}': expected {:?}, got {:?}",
+                                param_name, param_type, arg_value
+                            ),
+                            hint: None,
+                            line: 0,
+                            column: 0,
+                            source: None,
+                        });
+                    }
+
+                    new_env.borrow_mut().define(param_name.to_owned(), arg_value.clone())?;
+                }
+                PassingValue::ByRef => {
+                    let current_arg = &arguments[i];
+                    match current_arg {
+                        Expr::Literal(Value::Identifier(caller_variable_name)) => {
+                            // prevent ByRef on constants.
+                            if self.current_env.borrow().is_constant(caller_variable_name) {
+                                return Err(CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!(
+                                        "Cannot pass constant '{}' to BYREF parameter '{}' of '{}'",
+                                        caller_variable_name, param_name, identifier
+                                    ),
+                                    hint: Some("Constants cannot be modified. Pass a variable instead, or declare the parameter BYVAL.".to_string()),
+                                    line: 0,
+                                    column: 0,
+                                    source: None,
+                                });
+                            }
+
+                            // get the address 
+                            let address = match self.current_env.borrow_mut().find_address_of_variable(caller_variable_name.to_owned()) {
+                                Some(a) => {a},
+                                None => {
+                                    return Err(CPSError {
+                                        error_type: ErrorType::Runtime,
+                                        message: format!(
+                                            "'{}' is not a variable and cannot be passed BYREF.",
+                                            caller_variable_name
+                                        ),
+                                        hint: Some(
+                                            "BYREF parameters must be defined variables, not a literal, expression, or function call."
+                                            .to_string(),
+                                        ),
+                                        line: 0,
+                                        column: 0,
+                                        source: None,
+                                    });
+
+                                }
+                            };
+
+                            let arg_value = self.current_env.borrow().get(caller_variable_name).ok_or_else(|| CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Undefined variable '{}'", caller_variable_name),
+                                hint: None,
+                                line: 0, column: 0, source: None,
+                            })?;
+                            let actual_type = self.find_actual_type(&arg_value, caller_variable_name)?;
+
+                            if !check_if_types_match_exactly(&actual_type, param_type) {
+                                return Err(CPSError {
+                                    error_type: ErrorType::Runtime,
+                                    message: format!(
+                                        "Type mismatch for BYREF parameter '{}' of '{}': expected {:?}, but '{}' is {:?}",
+                                        param_name, identifier, param_type, caller_variable_name, actual_type
+                                    ),
+                                    hint: Some("A BYREF argument must have exactly the same type as the parameter, because they share storage".to_string()),
+                                    line: 0, column: 0, source: None,
+                                });
+                            }
+
+                            new_env.borrow_mut().set_variable_at_address(param_name.clone(), address)?;
+                        }
+                        _ => {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!(
+                                    "Cannot pass argument {} to '{}' by reference: parameter '{}' is BYREF but the argument is not a variable",
+                                    i + 1,
+                                    identifier,
+                                    param_name
+                                ),
+                                hint: Some("BYREF parameters must be given a plain variable name, not a literal, expression, or function call".to_string()),
+                                line: 0,
+                                column: 0,
+                                source: None,
+                            });
+                        }
+                    }
+                }
             }
-            new_env.borrow_mut().define(param_name.to_owned(), arg_value.clone())?;
         }
 
         let previous_env = Rc::clone(&self.current_env);
@@ -1907,7 +1992,7 @@ impl Interpreter {
     }
 
 
-    fn evaluate_function(&mut self, identifier: &String, parameters: &Vec<(String, Type)>, return_type: Type, body: &BlockStmt) -> Result<(), CPSError> {
+    fn evaluate_function(&mut self, identifier: &String, parameters: &Vec<(String, Type, PassingValue)>, return_type: Type, body: &BlockStmt) -> Result<(), CPSError> {
         // first check if function is a builtin
         if BUILTIN_FUNCTIONS.contains(&identifier.as_str()) {
             return Err(CPSError {
@@ -2517,6 +2602,21 @@ fn check_if_type_can_be_converted(value: &Value, target_type: &Type) -> bool {
                 false
             }
         },
+        _ => false,
+    }
+}
+
+fn check_if_types_match_exactly(actual: &Type, expected: &Type) -> bool {
+    match (actual, expected) {
+        (Type::Integer, Type::Integer) => true,
+        (Type::Real,    Type::Real)    => true,
+        (Type::String,  Type::String)  => true,
+        (Type::Boolean, Type::Boolean) => true,
+        (Type::Char,    Type::Char)    => true,
+        (Type::Array(a), Type::Array(b)) => {
+            a.bounds_2d.is_some() == b.bounds_2d.is_some()
+                && check_if_types_match_exactly(&a.base_type, &b.base_type)
+        }
         _ => false,
     }
 }

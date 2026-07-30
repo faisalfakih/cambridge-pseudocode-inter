@@ -52,6 +52,13 @@ pub enum Expr {
     EOF { filename: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// How the value is passed (by value or by reference)
+pub enum PassingValue {
+    ByVal,
+    ByRef,
+}
+
 
 
 
@@ -70,12 +77,12 @@ pub enum Stmt {
     Block(BlockStmt),
     Procedure {
         name: String,
-        parameters: Vec<(String, Type)>,
+        parameters: Vec<(String, Type, PassingValue)>,
         body: BlockStmt,
     },
     Function {
         name: String,
-        parameters: Vec<(String, Type)>,
+        parameters: Vec<(String, Type, PassingValue)>,
         return_type: Type,
         body: BlockStmt,
     },
@@ -293,7 +300,7 @@ impl Stmt {
             }
             Stmt::Procedure { name, parameters, body } => {
                 let mut result = format!("{}PROCEDURE {}(", indent_str, name);
-                let params: Vec<String> = parameters.iter().map(|(n, t)| format!("{}: {:?}", n, t)).collect();
+                let params: Vec<String> = parameters.iter().map(|(n, t, p)| format!("{:?} {}: {:?}", p, n, t)).collect();
                 result.push_str(&params.join(", "));
                 result.push_str(")\n");
                 for stmt in &body.statements {
@@ -305,7 +312,7 @@ impl Stmt {
             }
             Stmt::Function { name, parameters, return_type, body } => {
                 let mut result = format!("{}FUNCTION {}(", indent_str, name);
-                let params: Vec<String> = parameters.iter().map(|(n, t)| format!("{}: {:?}", n, t)).collect();
+                let params: Vec<String> = parameters.iter().map(|(p, t, b)| format!("{:?} {}: {:?}", b, p, t)).collect();
                 result.push_str(&params.join(", "));
                 result.push_str(&format!(") : {:?}\n", return_type));
                 for stmt in &body.statements {

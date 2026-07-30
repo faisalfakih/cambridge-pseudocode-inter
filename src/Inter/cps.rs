@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use crate::errortype::{CPSError, ErrorType};
-use crate::Parser::ast::{BlockStmt, Expr, FileMode};
+use crate::Parser::ast::{BlockStmt, Expr, FileMode, PassingValue};
 
 
 
@@ -69,7 +69,7 @@ pub struct OpenFile {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Function {
-    pub parameters: Vec<(String, Type)>,
+    pub parameters: Vec<(String, Type, PassingValue)>,
     pub return_type: Option<Type>,
     pub body: BlockStmt
 }
@@ -746,6 +746,39 @@ impl Environment {
 
 
         Ok(())
+    }
+
+    pub fn set_variable_at_address(&mut self, name: String, address: usize) -> Result<(), CPSError> {
+        if self.constants.contains(&name) {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot redefine constant '{}'", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            });
+        }
+
+        self.bindings.insert(name, address); // create variable at that specific address
+
+        Ok(())
+    }
+
+    pub fn find_address_of_variable(&mut self, name: String) -> Option<usize> {
+        let address = self.bindings.get(&name);
+
+        match address {
+            Some(addr) => {
+                return Some(*addr);
+            }
+            None => {
+                match &self.parent {
+                    Some(parent_rc) => parent_rc.borrow_mut().find_address_of_variable(name),
+                    None => {
+                        None
+                    },
+                }
+            }
+        }
     }
 
 }
