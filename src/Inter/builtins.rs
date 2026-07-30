@@ -36,7 +36,7 @@ fn expect_string(value: &Value, func: &str, pos: usize) -> Result<String, CPSErr
         Value::Char(s) => Ok(s.to_string().clone()),
         _ => Err(CPSError {
             error_type: ErrorType::Runtime,
-            message: format!("{} argument {} must be a char", func, pos),
+            message: format!("{} argument {} must be a string", func, pos),
             hint: None,
             line: 0,
             column: 0,
@@ -50,7 +50,7 @@ fn expect_char(value: &Value, func: &str, pos: usize) -> Result<char, CPSError> 
         Value::Char(s) => Ok(s.clone()),
         _ => Err(CPSError {
             error_type: ErrorType::Runtime,
-            message: format!("{} argument {} must be a string", func, pos),
+            message: format!("{} argument {} must be a char", func, pos),
             hint: None,
             line: 0,
             column: 0,
@@ -90,12 +90,6 @@ fn expect_real(value: &Value, func: &str, pos: usize) -> Result<f64, CPSError> {
     }
 }
 
-fn is_int(value: &Value) -> bool {
-    match value {
-        Value::Real(_) => true,
-        _ => false,
-    }
-}
 
 fn arg_count_error(func: &str, expected: usize, got: usize) -> CPSError {
     CPSError {
@@ -288,13 +282,9 @@ fn builtin_num_to_str(args: &[Value]) -> Result<Option<Value>, CPSError> {
 
     let val = &args[0];
 
-    let num = expect_real(val, "NUM_TO_STRING", 1)?;
+    let num = expect_real(val, "NUM_TO_STR", 1)?;
 
-    if is_int(val) {
-        return Ok(Some(Value::Integer(num as i64)))
-    } else {
-        return Ok(Some(Value::Real(num)))
-    }
+    Ok(Some(Value::String(num.to_string())))
 }
 
 fn builtin_str_to_num(args: &[Value]) -> Result<Option<Value>, CPSError> {
@@ -302,12 +292,12 @@ fn builtin_str_to_num(args: &[Value]) -> Result<Option<Value>, CPSError> {
         return Err(arg_count_error("STR_TO_NUM", 1, args.len()))
     }
 
-    let string = expect_string(&args[0], "NUM_TO_STRING", 1)?;
+    let string = expect_string(&args[0], "STR_TO_NUM", 1)?;
 
     let num = match string.parse::<f64>() {
         Ok(n) => n,
         Err(_) => return Err(CPSError { error_type: ErrorType::Runtime, 
-            message: "STR_TO_NUM argument must be a string".to_string(), hint: None, line: 0, column: 0, source: None }),
+            message: "STR_TO_NUM argument must be a numeric string".to_string(), hint: None, line: 0, column: 0, source: None }),
     };
     
     Ok(Some(Value::Real(num)))
@@ -321,7 +311,8 @@ fn builtin_is_num(args: &[Value]) -> Result<Option<Value>, CPSError> {
 
     let num = expect_string(&args[0], "IS_NUM", 1)?;
 
-    Ok(Some(Value::Boolean(num.chars().all(char::is_numeric))))
+    Ok(Some(Value::Boolean(num.parse::<f64>().is_ok())))
+
 }
 
 fn builtin_asc(args: &[Value]) -> Result<Option<Value>, CPSError> {
@@ -329,7 +320,7 @@ fn builtin_asc(args: &[Value]) -> Result<Option<Value>, CPSError> {
         return Err(arg_count_error("ASC", 1, args.len()))
     }
 
-    let c = expect_char(&args[1], "ASC", args.len())?;
+    let c = expect_char(&args[0], "ASC", 1)?;
 
     Ok(Some(Value::Integer(c as u8 as i64)))
 }
@@ -339,7 +330,20 @@ fn builtin_chr(args: &[Value]) -> Result<Option<Value>, CPSError> {
         return Err(arg_count_error("CHR", 1, args.len()))
     }
 
-    let number = expect_int(&args[1], "CHR", args.len())?;
+    let number = expect_int(&args[0], "CHR", 1)?;
+
+    if number < 0 || number > 255 {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("CHR argument {} is out of range (must be 0 to 255)", number),
+            hint: Some("Valid character codes are 0 to 255".to_string()),
+            line: 0,
+            column: 0,
+            source: None,
+        });
+    }
+
+
 
     Ok(Some(Value::Char(number as u8 as char)))
 
