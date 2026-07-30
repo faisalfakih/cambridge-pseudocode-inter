@@ -192,7 +192,7 @@ Contributions are welcome! This project is being developed as part of learning c
 
 ## Resources
 
-- [Cambridge Pseudocode Guide for Teachers (PDF)](https://www.cambridgeinternational.org/Images/697401-2026-pseudocode-guide-for-teachers.pdf)
+- [Cambridge Pseudocode Guide for Teachers (PDF)](https://www.cambridgeinternational.org/Images/721401-2027-2029-pseudocode-guide.pdf)
 - [Project Repository](https://github.com/faisalfakih/cambridge-pseudocode-inter)
 
 ## License
