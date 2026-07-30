@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-REPO="faisalfakih/cambridge-pseudocode-inter"
+REPO="faisalfakih/cambridge-psudocode-inter"
 BINARY="cps"
 INSTALL_DIR="/usr/local/bin"
 
@@ -59,7 +59,7 @@ if [ "$HTTP_STATUS" -ne 200 ]; then
   echo "❌ No binary available for $PLATFORM yet."
   echo "   Please build from source:"
   echo "   git clone https://github.com/$REPO"
-  echo "   cd cambridge-pseudocode-inter"
+  echo "   cd cambridge-psudocode-inter"
   echo "   cargo build --release"
   exit 1
 fi

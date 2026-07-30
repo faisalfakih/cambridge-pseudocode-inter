@@ -398,6 +398,20 @@ impl Lexer {
                         return Ok(Token::new("<".to_string(), TokenType::LessThan, self.line, self.column - 1));
                     }
                 }
+                '←'      // all types of unicode arrows that that are acceptable as declarations (mostly for LLMs which use alternative arrows for assignemnt)
+                    | '⟵'    
+                    | '⇐'    
+                    | '⟸'    
+                    | '↜'    
+                    | '↞'    
+                    | '↢'   
+                    | '⇜'   
+                    | '⬅'    
+                    => {
+                        self.position += 1;
+                        self.column += 1;
+                        return Ok(Token::new("<-".to_string(), TokenType::Arrow, self.line, self.column - 1));
+                    }
                 '>' => {
                     let next_char = self.peek(1);
                     if next_char == Some('=') {
