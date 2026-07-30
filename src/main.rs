@@ -14,7 +14,7 @@ use crate::Parser::parser;
 fn main() {
     let matches = Command::new("cps")
         .author("Faisal Fakih")
-        .version("0.1.12")
+        .version("0.1.15")
         .about("Interpreter for the Cambridge Pseudocode Language")
         .arg(
             Arg::new("file")
