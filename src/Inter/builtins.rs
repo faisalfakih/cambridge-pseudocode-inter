@@ -207,50 +207,77 @@ fn builtin_ucase(args: &[Value]) -> Result<Option<Value>, CPSError> {
     Ok(Some(Value::String(result)))
 }
 
-// fn builtin_int(args: &[Value]) -> Result<Option<Value>, CPSError> { // <- this is the original in the cambridge pseudocode but it only accepts real numbers
-//                                                                     // <- makes it really useless
-//     if args.len() != 1 {
-//         return Err(arg_count_error("INT", 1, args.len()));
-//     }
-//     let real = expect_real(&args[0], "INT", 1)?;
-//     let result = real.floor() as i64;
-//     Ok(Some(Value::Integer(result)))
-// }
-
-
-fn builtin_int(args: &[Value]) -> Result<Option<Value>, CPSError> {
+fn builtin_int(args: &[Value]) -> Result<Option<Value>, CPSError> { 
     if args.len() != 1 {
         return Err(arg_count_error("INT", 1, args.len()));
     }
-    
-    let real = match &args[0] {
-        Value::Real(r) => *r,
-        Value::Integer(i) => *i as f64,
-        Value::String(s) => {
-            s.trim().parse::<f64>().map_err(|_| CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("INT cannot convert string '{}' to a number", s),
-                hint: Some("String must contain a valid number".to_string()),
-                line: 0,
-                column: 0,
-                source: None,
-            })?
-        },
-        _ => {
-            return Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: "INT argument must be a real number, integer, or numeric string".to_string(),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            });
-        }
-    };
-    
-    let result = real.floor() as i64;
-    Ok(Some(Value::Integer(result)))
+
+    if let Value::String(s) = &args[0] {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("INT cannot be applied to the string '{}'", s),
+            hint: Some("Use STR_TO_NUM to convert a string first, e.g. INT(STR_TO_NUM(X))".to_string()),
+            line: 0, column: 0, source: None,
+        });
+    }
+
+
+    let real = expect_real(&args[0], "INT", 1)?;
+    let truncated = real.trunc();
+    if !truncated.is_finite() {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("INT cannot convert {} to an INTEGER", real),
+            hint: Some("The value is infinite or not a number".to_string()),
+            line: 0, column: 0, source: None,
+        });
+    }
+    if truncated < i64::MIN as f64 || truncated > i64::MAX as f64 {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("INT argument {} is outside the range of an INTEGER", real),
+            hint: None,
+            line: 0, column: 0, source: None,
+        });
+    }
+
+    Ok(Some(Value::Integer(truncated as i64)))
 }
+
+// REMOVE THIS NOW AS STRING TO INT IS USELESS AFTER THE IMPLEMENTATION OF THE STR_TO_NUM FUNC
+// fn builtin_int(args: &[Value]) -> Result<Option<Value>, CPSError> {
+//     if args.len() != 1 {
+//         return Err(arg_count_error("INT", 1, args.len()));
+//     }
+//     
+//     let real = match &args[0] {
+//         Value::Real(r) => *r,
+//         Value::Integer(i) => *i as f64,
+//         Value::String(s) => {
+//             s.trim().parse::<f64>().map_err(|_| CPSError {
+//                 error_type: ErrorType::Runtime,
+//                 message: format!("INT cannot convert string '{}' to a number", s),
+//                 hint: Some("String must contain a valid number".to_string()),
+//                 line: 0,
+//                 column: 0,
+//                 source: None,
+//             })?
+//         },
+//         _ => {
+//             return Err(CPSError {
+//                 error_type: ErrorType::Runtime,
+//                 message: "INT argument must be a real number, integer, or numeric string".to_string(),
+//                 hint: None,
+//                 line: 0,
+//                 column: 0,
+//                 source: None,
+//             });
+//         }
+//     };
+//     
+//     let result = real.floor() as i64;
+//     Ok(Some(Value::Integer(result)))
+// }
 
 
 fn builtin_rand(args: &[Value]) -> Result<Option<Value>, CPSError> {
