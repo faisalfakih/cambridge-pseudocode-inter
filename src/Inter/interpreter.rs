@@ -619,7 +619,7 @@ impl Interpreter {
                 if n.fract() != 0.0 {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
-                        message: format!("FOR loop start value must be an integer, got real number: {}", n),
+                        message: format!("FOR loop end value must be an integer, got real number: {}", n),
                         hint: None,
                         line: 0,
                         column: 0,
