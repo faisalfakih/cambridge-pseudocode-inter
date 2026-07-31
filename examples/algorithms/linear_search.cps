@@ -47,7 +47,7 @@ NEXT Idx
 OUTPUT "Enter the number to search for:"
 INPUT UserInput
 
-Target <- INT(UserInput) // Convert the user input to an integer and store in target
+Target <- INT(STR_TO_NUM(UserInput)) // Convert the user input to an integer and store in target
 
 // =============
 // LINEAR SEARCH

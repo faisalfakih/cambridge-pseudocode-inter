@@ -208,13 +208,40 @@ fn builtin_ucase(args: &[Value]) -> Result<Option<Value>, CPSError> {
 }
 
 fn builtin_int(args: &[Value]) -> Result<Option<Value>, CPSError> { 
-                                                                    
     if args.len() != 1 {
         return Err(arg_count_error("INT", 1, args.len()));
     }
+
+    if let Value::String(s) = &args[0] {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("INT cannot be applied to the string '{}'", s),
+            hint: Some("Use STR_TO_NUM to convert a string first, e.g. INT(STR_TO_NUM(X))".to_string()),
+            line: 0, column: 0, source: None,
+        });
+    }
+
+
     let real = expect_real(&args[0], "INT", 1)?;
-    let result = real.floor() as i64;
-    Ok(Some(Value::Integer(result)))
+    let truncated = real.trunc();
+    if !truncated.is_finite() {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("INT cannot convert {} to an INTEGER", real),
+            hint: Some("The value is infinite or not a number".to_string()),
+            line: 0, column: 0, source: None,
+        });
+    }
+    if truncated < i64::MIN as f64 || truncated > i64::MAX as f64 {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("INT argument {} is outside the range of an INTEGER", real),
+            hint: None,
+            line: 0, column: 0, source: None,
+        });
+    }
+
+    Ok(Some(Value::Integer(truncated as i64)))
 }
 
 // REMOVE THIS NOW AS STRING TO INT IS USELESS AFTER THE IMPLEMENTATION OF THE STR_TO_NUM FUNC
