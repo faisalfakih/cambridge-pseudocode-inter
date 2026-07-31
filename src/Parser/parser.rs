@@ -978,6 +978,27 @@ impl Parser {
             }
         };
 
+        // check for STEP
+        let curr_token = self.peek(0);
+        let mut step_expr = Expr::Literal(Value::Integer(1)); // set the default step to 1
+        if curr_token.token_type == TokenType::Step {
+            self.advance();
+            step_expr = match self.parse_expr(0)? {
+                Ast::Expression(e) => e,
+                Ast::Identifier(id) => Expr::Literal(Value::Identifier(id)),
+                _ => {
+                    return Err(CPSError{
+                        error_type: ErrorType::Syntax,
+                        message: "Invalid step value in FOR loop".to_string(),
+                        hint: Some("Step value must be a valid expression".to_string()),
+                        line: for_token.line,
+                        column: for_token.column,
+                        source: Some(self.source.clone()),
+                    })
+                }
+            };
+        }
+
         self.scope += 1; // enter the scope of the for loop
 
         let body_statements = self.parse_statements()?;
@@ -1029,6 +1050,7 @@ impl Parser {
             start: Box::new(start_expr), 
             end: Box::new(end_expr),
             body: BlockStmt { statements: body_statements }, 
+            step: Box::new(step_expr),
         }))
     }
 

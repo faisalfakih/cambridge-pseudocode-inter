@@ -68,7 +68,7 @@ pub enum Stmt {
     Case { identifier: Box<Expr>, cases: Vec<(CaseCondition, BlockStmt)>, otherwise: Option<BlockStmt> },
     While { condition: Box<Expr>, body: BlockStmt },
     Repeat { body: BlockStmt, until: Box<Expr> },
-    For { identifier: String, start: Box<Expr>, end: Box<Expr>, body: BlockStmt },
+    For { identifier: String, start: Box<Expr>, end: Box<Expr>, body: BlockStmt, step: Box<Expr> },
     Assignment { identifier: String, array_index: Option<(Box<Expr>, Option<Box<Expr>>)>, value: Box<Ast> },
     Constant { identifier: String, value: Value },
     Decleration { identifier: String, type_: Type},
@@ -257,8 +257,8 @@ impl Stmt {
                 result.push_str(&format!("{}ENDWHILE", indent_str));
                 result
             }
-            Stmt::For { identifier, start, end, body } => {
-                let mut result = format!("{}FOR {} = {} TO {}\n", indent_str, identifier, start.to_prefix(), end.to_prefix());
+            Stmt::For { identifier, start, end, body, step } => {
+                let mut result = format!("{}FOR {} = {} TO {} STEP {}\n", indent_str, identifier, start.to_prefix(), end.to_prefix(), step.to_prefix());
                 for stmt in &body.statements {
                     result.push_str(&stmt.to_prefix(indent + 1));
                     result.push('\n');

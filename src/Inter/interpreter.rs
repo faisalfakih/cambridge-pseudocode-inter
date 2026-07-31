@@ -275,7 +275,7 @@ impl Interpreter {
                 }
                 Ok(())
             }
-            Stmt::For { identifier, start, end, body } => self.evaluate_for(identifier, start, end, body),
+            Stmt::For { identifier, start, end, body, step } => self.evaluate_for(identifier, start, end, body, step),
             Stmt::OpenFile { filename, mode  } => self.evaluate_open_file(filename, mode),
             Stmt::CloseFile { filename } => self.evaluate_close_file(filename),
             Stmt::WriteFile { filename, value } => self.evaluate_write_file(filename, value),
@@ -578,12 +578,14 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_for(&mut self, identifier: &String, start: &Expr, end: &Expr, body: &BlockStmt) -> Result<(), CPSError> {
+    fn evaluate_for(&mut self, identifier: &String, start: &Expr, end: &Expr, body: &BlockStmt, step: &Expr) -> Result<(), CPSError> {
         let start_value = self.evaluate_expr(start)?;
         let end_value = self.evaluate_expr(end)?;
+        let step_value = self.evaluate_expr(step)?;
 
         let start_int;
         let end_int;
+        let step_int;
 
         match start_value {
             Value::Integer(n) => start_int = n,
@@ -617,7 +619,7 @@ impl Interpreter {
                 if n.fract() != 0.0 {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
-                        message: format!("FOR loop start value must be an integer, got real number: {}", n),
+                        message: format!("FOR loop end value must be an integer, got real number: {}", n),
                         hint: None,
                         line: 0,
                         column: 0,
@@ -637,13 +639,52 @@ impl Interpreter {
                 });
             }
         }
+        match step_value {
+            Value::Integer(n) => step_int = n,
+            Value::Real(n) => {
+                if n.fract() != 0.0 {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("FOR loop step value must evaluate to an integer number, got: {:?}", step_value),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    });
+                }
+                step_int = n as i64;
+            },
+            _ => {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("FOR loop step value must evaluate to an integer number, got: {:?}", step_value),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                });
+            }
+        }
 
         // first declare the loop variable
         self.current_env
             .borrow_mut()
             .define(identifier.to_owned(), Value::Integer(start_int.to_owned()))?;
 
-        for i in start_int.to_owned()..=end_int.to_owned() {
+        // if step int is 0, panick
+        if step_int == 0 {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: "The STEP in a for loop cannot be equal to 0.".to_string(),
+                hint: None,
+                line: 0,
+                column: 0,
+                source: None,
+            })
+        }
+
+        let mut i = start_int;
+        while (step_int > 0 && i <= end_int) || (step_int < 0 && i >= end_int) {
             self.current_env
                 .borrow_mut()
                 .set(identifier, Value::Integer(i))
@@ -659,6 +700,8 @@ impl Interpreter {
             for stmt in &body.statements {
                 self.evaluate_stmt(stmt)?;
             }
+
+            i += step_int;
         }
 
         Ok(())
