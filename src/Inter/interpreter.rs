@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{self, File};
+// use std::fs::{self, File};
 use std::{cell::RefCell, rc::Rc};
 
 // Thread+channel web mode is not available on WASM.
@@ -2580,6 +2580,7 @@ impl Interpreter {
             Value::Real(_) |
             Value::String(_) |
             Value::Boolean(_) |
+            Value::Array { .. } |
             Value::Char(_) => {},
             Value::Identifier(iden) => {
                 match self.current_env 
