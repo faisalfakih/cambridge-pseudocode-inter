@@ -53,12 +53,13 @@ impl std::fmt::Debug for Type {
 fn fmt_bound(e: &Expr) -> String {
     match e {
         Expr::Literal(Value::Integer(n)) => n.to_string(),
+        Expr::Literal(Value::Real(r)) if r.fract() == 0.0 => (*r as i64).to_string(),
         Expr::Literal(Value::Identifier(name)) => name.clone(),
         _ => "?".to_string(),
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ArrayType {
     pub lower_bound: Box<Expr>,
     pub upper_bound: Box<Expr>,
@@ -87,7 +88,7 @@ impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Integer(n) => write!(f, "{}", n),
-            Value::Real(n) => write!(f, "{}", n),
+            Value::Real(n) => write!(f, "{:?}", n),
             Value::String(string_value) => write!(f, "\"{}\"", string_value),
             Value::Boolean(b) => {
                 if *b {

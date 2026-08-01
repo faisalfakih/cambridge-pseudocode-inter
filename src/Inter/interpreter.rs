@@ -355,7 +355,10 @@ impl Interpreter {
                             "Type mismatch: cannot assign {:?} to variable '{}' of type {:?}",
                             actual_type, identifier, expected_type
                         ),
-                        hint: Some("The value type must match the declared variable type".to_string()),
+                        hint: Some(format!(
+                                "A REAL can only be assigned to an INTEGER when it has no fractional part. \
+                                Use INT({}) if you want to truncate toward zero.", r
+                        )),
                         line: 0,
                         column: 0,
                         source: None,
