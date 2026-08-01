@@ -8,7 +8,7 @@ use crate::Parser::ast::{BlockStmt, Expr, FileMode, PassingValue};
 
 
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Type {
     Integer,
     Real,
@@ -21,6 +21,43 @@ pub enum Type {
     // Enum(String),
 }
 
+impl std::fmt::Debug for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Integer => write!(f, "Integer"),
+            Type::Real => write!(f, "Real"),
+            Type::String => write!(f, "String"),
+            Type::Char => write!(f, "Char"),
+            Type::Function => write!(f, "Function"),
+            Type::Array(array_type) => {
+                let lower = fmt_bound(&array_type.lower_bound);
+                let upper = fmt_bound(&array_type.upper_bound);
+                match &array_type.bounds_2d {
+                    Some((col_lower, col_upper)) => write!(
+                        f,
+                        "Array[{}:{}, {}:{}] OF {:?}",
+                        lower,
+                        upper,
+                        fmt_bound(col_lower),
+                        fmt_bound(col_upper),
+                        array_type.base_type
+                    ),
+                    None => write!(f, "Array[{}:{}] OF {:?}", lower, upper, array_type.base_type),
+                }
+            }
+            Type::Boolean => write!(f, "Boolean")
+        }
+    }
+}
+
+fn fmt_bound(e: &Expr) -> String {
+    match e {
+        Expr::Literal(Value::Integer(n)) => n.to_string(),
+        Expr::Literal(Value::Identifier(name)) => name.clone(),
+        _ => "?".to_string(),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArrayType {
     pub lower_bound: Box<Expr>,
@@ -30,7 +67,7 @@ pub struct ArrayType {
 }
 
 // Runtime values (actual data)
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Value {
     Integer(i64),
     Real(f64),
@@ -45,6 +82,83 @@ pub enum Value {
     // Null,  
 }
 
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Integer(n) => write!(f, "{}", n),
+            Value::Real(n) => write!(f, "{}", n),
+            Value::String(string_value) => write!(f, "\"{}\"", string_value),
+            Value::Boolean(b) => {
+                if *b {
+                    write!(f, "TRUE")
+                } else {
+                    write!(f, "FALSE")
+                }
+            }
+            Value::Char(c) => write!(f, "'{}'", c),
+            Value::Array { array, lower_bound, bounds_2d } => {
+                let base = match array.first() {
+                    Some(Value::Integer(_)) => "Integer",
+                    Some(Value::Real(_)) => "Real",
+                    Some(Value::String(_)) => "String",
+                    Some(Value::Boolean(_)) => "Boolean",
+                    Some(Value::Char(_)) => "Char",
+                    _ => "?",
+                };
+                match bounds_2d {
+                    Some((col_lower, col_upper)) => {
+                        let cols = col_upper - col_lower + 1;
+                        let rows = if cols == 0 { 0 } else { array.len() / cols };
+                        write!(
+                            f,
+                            "Array[{}:{}, {}:{}] OF {}",
+                            lower_bound,
+                            lower_bound + rows.saturating_sub(1),
+                            col_lower,
+                            col_upper,
+                            base
+                        )?;
+                    }
+                    None => {
+                        write!(
+                            f,
+                            "Array[{}:{}] OF {}",
+                            lower_bound,
+                            lower_bound + array.len().saturating_sub(1),
+                            base
+                        )?;
+                    }
+                }
+                if f.alternate() {
+                    write!(f, " {:?}", array)?;
+                }
+                Ok(())
+            }
+            Value::Identifier(name) => write!(f, "{}", name),
+            Value::Function(function) => {
+                let params: Vec<String> = function
+                    .parameters
+                    .iter()
+                    .map(|(param_name, param_type, passing_value)| {
+                        let keyword = match passing_value {
+                            PassingValue::ByVal => "BYVAL",
+                            PassingValue::ByRef => "BYREF",
+                        };
+                        format!("{} {} : {:?}", keyword, param_name, param_type)
+                    })
+                .collect();
+
+                match &function.return_type {
+                    Some(return_type) => {
+                        write!(f, "FUNCTION({}) RETURNS {:?}", params.join(", "), return_type)
+                    }
+                    None => write!(f, "PROCEDURE({})", params.join(", ")),
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct CloneableFile(File);

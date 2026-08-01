@@ -345,7 +345,23 @@ impl Interpreter {
 
 
         let converted_val = match (&val, &expected_type, &actual_type) {
-            (Value::Real(r), Type::Integer, Type::Real) => Value::Integer(*r as i64),
+            (Value::Real(r), Type::Integer, Type::Real) =>  {
+                if (*r).fract() == 0.0 {
+                    Value::Integer(*r as i64) 
+                } else {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!(
+                            "Type mismatch: cannot assign {:?} to variable '{}' of type {:?}",
+                            actual_type, identifier, expected_type
+                        ),
+                        hint: Some("The value type must match the declared variable type".to_string()),
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    });
+                }
+            },
 
             (Value::Integer(i), Type::Real, Type::Integer) => Value::Real(*i as f64),
 
