@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{self, File};
+// use std::fs::{self, File};
 use std::{cell::RefCell, rc::Rc};
 
 // Thread+channel web mode is not available on WASM.
@@ -345,7 +345,26 @@ impl Interpreter {
 
 
         let converted_val = match (&val, &expected_type, &actual_type) {
-            (Value::Real(r), Type::Integer, Type::Real) => Value::Integer(*r as i64),
+            (Value::Real(r), Type::Integer, Type::Real) =>  {
+                if (*r).fract() == 0.0 {
+                    Value::Integer(*r as i64) 
+                } else {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!(
+                            "Type mismatch: cannot assign {:?} to variable '{}' of type {:?}",
+                            actual_type, identifier, expected_type
+                        ),
+                        hint: Some(format!(
+                                "A REAL can only be assigned to an INTEGER when it has no fractional part. \
+                                Use INT({}) if you want to truncate toward zero.", r
+                        )),
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    });
+                }
+            },
 
             (Value::Integer(i), Type::Real, Type::Integer) => Value::Real(*i as f64),
 
@@ -2580,6 +2599,7 @@ impl Interpreter {
             Value::Real(_) |
             Value::String(_) |
             Value::Boolean(_) |
+            Value::Array { .. } |
             Value::Char(_) => {},
             Value::Identifier(iden) => {
                 match self.current_env 
