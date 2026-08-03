@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::Inter::cps::{ArrayType, Type, Value};
+use crate::Inter::cps::{ArrayType, Date, Type, Value};
 use crate::Lexer::{lexer::Token, lexer::TokenType};
 use crate::errortype::{CPSError, ErrorType};
 use crate::Parser::ast::{BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, PassingValue, TypeDefinition};
@@ -13,6 +13,34 @@ pub struct Parser {
     operators: HashMap<TokenType, Operator>,
     source: String,
     scope: u32, // track the current scope level to prevent invalid terminators in the global scope
+}
+
+// where a type annotation appears. Determines the wording of the error message, and whether the array type is a legal type in that position.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TypeContext {
+    Declaration,    // DECLARE x : ...
+    Parameter,      // PROCEDURE/FUNCTION parameter
+    ReturnType,     // FUNCTION ... RETURNS ...
+    ArrayBase,      // ARRAY[..] OF ...
+    SetBase,        // SET OF ...
+    PointerTarget,  // TYPE X = ^...
+}
+
+impl TypeContext {
+    fn allows_array(self) -> bool {
+        matches!(self, Self::Declaration | Self::Parameter | Self::ReturnType)
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Declaration   => "after the colon",
+            Self::Parameter     => "for parameter",
+            Self::ReturnType    => "for function return",
+            Self::ArrayBase     => "for array base type",
+            Self::SetBase       => "for set base type",
+            Self::PointerTarget => "after '^' in pointer type declaration",
+        }
+    }
 }
 
 impl Parser {
@@ -86,7 +114,7 @@ impl Parser {
             | TokenType::GreaterThan | TokenType::GreaterEqual
             | TokenType::Mod | TokenType::Div
             | TokenType::Equal | TokenType::NotEqual | TokenType::LessThan | TokenType::LessEqual
-            | TokenType::Identifier | TokenType::NumberLiteral | TokenType::StringLiteral | TokenType::CharLiteral
+            | TokenType::Identifier | TokenType::NumberLiteral | TokenType::StringLiteral | TokenType::CharLiteral | TokenType::DateLiteral
             | TokenType::Until
             // | TokenType::True | TokenType::False
             | TokenType::LParen | TokenType::Eof
@@ -153,6 +181,20 @@ impl Parser {
                 self.advance();
                 let ch = token.lexeme.chars().next().unwrap_or('\0');
                 Ok(Ast::Expression(Expr::Literal(Value::Char(ch))))
+            }
+
+            TokenType::DateLiteral => {
+                self.advance();
+                let date = Date::parse(&token.lexeme).map_err(|reason| CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("'{}' is not a valid date: {}", token.lexeme, reason),
+                    hint: None,
+                    column: token.column,
+                    line: token.line,
+                    source: Some(self.source.clone()),
+                })?;
+
+                Ok(Ast::Expression(Expr::Literal(Value::Date(date))))
             }
 
             TokenType::Identifier => {
@@ -768,6 +810,7 @@ impl Parser {
             TokenType::EndCase | TokenType::Otherwise | TokenType::Eof => true,
             TokenType::NumberLiteral | TokenType::StringLiteral | 
                 TokenType::CharLiteral | TokenType::Identifier | 
+                TokenType::DateLiteral |
                 TokenType::True | TokenType::False => { 
                     self.could_be_case_label()
                 }
@@ -779,6 +822,7 @@ impl Parser {
         match self.peek(0).token_type {
             TokenType::NumberLiteral | TokenType::StringLiteral | 
                 TokenType::CharLiteral | TokenType::Identifier | 
+                TokenType::DateLiteral |
                 TokenType::True | TokenType::False => {  
                     match self.peek(1).token_type {
                         TokenType::Colon => true,
@@ -876,8 +920,8 @@ impl Parser {
             Ast::Stmt(s) => Ok(s),
             _ => Err(CPSError {
                 error_type: ErrorType::Syntax,
-                message: "Expected statement in while body".to_string(),
-                hint: Some("WHILE statement body must contain valid statements".to_string()),
+                message: "Expected statement in repeat body".to_string(),
+                hint: Some("REPEAT .. UNTIL statement body must contain valid statements".to_string()),
                 line: repeat_token.line,
                 column: repeat_token.column,
                 source: Some(self.source.clone()),
@@ -1007,8 +1051,8 @@ impl Parser {
             Ast::Stmt(s) => Ok(s),
             _ => Err(CPSError {
                 error_type: ErrorType::Syntax,
-                message: "Expected statement in while body".to_string(),
-                hint: Some("WHILE statement body must contain valid statements".to_string()),
+                message: "Expected statement in for loops body".to_string(),
+                hint: Some("FOR statement body must contain valid statements".to_string()),
                 line: for_token.line,
                 column: for_token.column,
                 source: Some(self.source.clone()),
@@ -1072,22 +1116,7 @@ impl Parser {
                 line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
         }
 
-        let type_token = self.advance();
-
-        let data_type = match type_token.token_type {
-            TokenType::Integer => Type::Integer,
-            TokenType::Real => Type::Real,
-            TokenType::String => Type::String,
-            TokenType::Char => Type::Char,
-            TokenType::Boolean => Type::Boolean, 
-            TokenType::Array => self.parse_array_type()?,
-            _ => {
-                return Err(CPSError { error_type: ErrorType::Syntax, 
-                    message: "Expected a valid data type after the colon".to_string(), hint: None, 
-                    line: type_token.line, column: type_token.column, source: Some(self.source.clone())
-                });
-            }
-        };
+        let data_type = self.parse_type(TypeContext::Declaration)?;
 
         Ok(Ast::Stmt(Stmt::Decleration { identifier: identifier.lexeme, type_: data_type }))
     }
@@ -1261,28 +1290,10 @@ impl Parser {
                 });
             }
 
-            let type_token = self.advance();
-            let param_type = match type_token.token_type {
-                TokenType::Integer => Type::Integer,
-                TokenType::Real => Type::Real,
-                TokenType::String => Type::String,
-                TokenType::Char => Type::Char,
-                TokenType::Boolean => Type::Boolean,
-                TokenType::Array => self.parse_array_type()?,
-                _ => {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected a valid data type for parameter".to_string(),
-                        hint: None,
-                        line: type_token.line,
-                        column: type_token.column,
-                        source: Some(self.source.clone()),
-                    });
-                }
-            };
+            let param_type = self.parse_type(TypeContext::Parameter)?;
             parameters.push((param_identifier.lexeme, param_type, passing_value));
 
-            // check for comma after 
+            // check for comma after
             if self.peek(0).token_type == TokenType::Comma {
                 self.advance(); // consume comma
             } else {
@@ -1428,27 +1439,9 @@ impl Parser {
                 });
             }
 
-            let type_token = self.advance();
-            let param_type = match type_token.token_type {
-                TokenType::Integer => Type::Integer,
-                TokenType::Real => Type::Real,
-                TokenType::String => Type::String,
-                TokenType::Char => Type::Char,
-                TokenType::Boolean => Type::Boolean,
-                TokenType::Array => self.parse_array_type()?,
-                _ => {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected a valid data type for parameter".to_string(),
-                        hint: None,
-                        line: type_token.line,
-                        column: type_token.column,
-                        source: Some(self.source.clone()),
-                    });
-                }
-            };
+            let param_type = self.parse_type(TypeContext::Parameter)?;
             parameters.push((param_identifier.lexeme, param_type, passing_value));
-            // check for comma after 
+            // check for comma after
             if self.peek(0).token_type == TokenType::Comma {
                 self.advance(); // consume comma
             } else {
@@ -1480,25 +1473,7 @@ impl Parser {
             });
         }
 
-        let return_type_token = self.advance();
-        let return_type = match return_type_token.token_type {
-            TokenType::Integer => Type::Integer,
-            TokenType::Real => Type::Real,
-            TokenType::String => Type::String,
-            TokenType::Char => Type::Char,
-            TokenType::Boolean => Type::Boolean,
-            TokenType::Array => self.parse_array_type()?,
-            _ => {
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Expected a valid return data type for function".to_string(),
-                    hint: None,
-                    line: return_type_token.line,
-                    column: return_type_token.column,
-                    source: Some(self.source.clone()),
-                });
-            }
-        };
+        let return_type = self.parse_type(TypeContext::ReturnType)?;
 
         self.scope += 1;
 
@@ -1610,6 +1585,45 @@ impl Parser {
         Ok(Ast::Stmt(Stmt::Call { name: identifier_token.lexeme, arguments }) )
     }
 
+    /// Consumes one type token (plus any array suffix) and returns the `Type`.
+    /// The caller must NOT consume the type token beforehand.
+    fn parse_type(&mut self, context: TypeContext) -> Result<Type, CPSError> {
+        let type_token = self.advance();
+
+        let data_type = match &type_token.token_type {
+            TokenType::Integer => Type::Integer,
+            TokenType::Real => Type::Real,
+            TokenType::String => Type::String,
+            TokenType::Char => Type::Char,
+            TokenType::Boolean => Type::Boolean,
+            TokenType::Date => Type::Date,
+
+            // ARRAY is consumed here; parse_array_type picks up at '['.
+            // Where arrays are not permitted the guard fails and the '_' arm
+            // below reports it.
+            TokenType::Array if context.allows_array() => self.parse_array_type()?,
+
+            _ => {
+                let hint = if type_token.token_type == TokenType::Array {
+                    Some("Arrays cannot be nested or used as a base type.".to_string())
+                } else {
+                    Some("Valid types are INTEGER, REAL, STRING, CHAR, BOOLEAN, DATE and ARRAY.".to_string())
+                };
+
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("Expected a valid data type {}", context.describe()),
+                    hint,
+                    line: type_token.line,
+                    column: type_token.column,
+                    source: Some(self.source.clone()),
+                });
+            }
+        };
+
+        Ok(data_type)
+    }
+
     fn parse_array_type(&mut self) -> Result<Type, CPSError> {
         let open_square = self.advance();
         if open_square.token_type != TokenType::LSquare {
@@ -1689,24 +1703,7 @@ impl Parser {
                 source: Some(self.source.clone()),
             });
         }
-        let base_type_token = self.advance();
-        let base_type = match base_type_token.token_type {
-            TokenType::Integer => Type::Integer,
-            TokenType::Real => Type::Real,
-            TokenType::String => Type::String,
-            TokenType::Char => Type::Char,
-            TokenType::Boolean => Type::Boolean,
-            _ => {
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Expected a valid data type for array base type".to_string(),
-                    hint: None,
-                    line: base_type_token.line,
-                    column: base_type_token.column,
-                    source: Some(self.source.clone()),
-                });
-            }
-        };
+        let base_type = self.parse_type(TypeContext::ArrayBase)?;
         Ok(Type::Array(ArrayType {
             lower_bound: Box::new(ast_to_expr(lower_bound?)?),
             upper_bound: Box::new(ast_to_expr(upper_bound?)?),
@@ -1861,44 +1858,11 @@ impl Parser {
                 TokenType::Caret => {
                     // pointer type declaration
 
-                    let type_ = self.advance();
-                    match type_.token_type {
-                        TokenType::Integer => {
-                            return Ok(Ast::Stmt(Stmt::TypeDef {
-                                type_definition: TypeDefinition::Pointer { name: identifier_token.lexeme, points_to: Box::new(Type::Integer) },
-                            }) );
-                        }
-                        TokenType::Real => {
-                            return Ok(Ast::Stmt(Stmt::TypeDef {
-                                type_definition: TypeDefinition::Pointer { name: identifier_token.lexeme, points_to: Box::new(Type::Real) },
-                            }) );
-                        }
-                        TokenType::String => {
-                            return Ok(Ast::Stmt(Stmt::TypeDef {
-                                type_definition: TypeDefinition::Pointer { name: identifier_token.lexeme, points_to: Box::new(Type::String) },
-                            }) );
-                        }
-                        TokenType::Char => {
-                            return Ok(Ast::Stmt(Stmt::TypeDef {
-                                type_definition: TypeDefinition::Pointer { name: identifier_token.lexeme, points_to: Box::new(Type::Char) },
-                            }) );
-                        }
-                        TokenType::Boolean => {
-                            return Ok(Ast::Stmt(Stmt::TypeDef {
-                                type_definition: TypeDefinition::Pointer { name: identifier_token.lexeme, points_to: Box::new(Type::Boolean) },
-                            }) );
-                        }
-                        _ => {
-                            return Err(CPSError {
-                                error_type: ErrorType::Syntax,
-                                message: "Expected a valid data type after '^' in pointer type declaration".to_string(),
-                                hint: None,
-                                line: type_.line,
-                                column: type_.column,
-                                source: Some(self.source.clone()),
-                            });
-                        }
-                    }
+                    let points_to = self.parse_type(TypeContext::PointerTarget)?;
+
+                    return Ok(Ast::Stmt(Stmt::TypeDef {
+                        type_definition: TypeDefinition::Pointer { name: identifier_token.lexeme, points_to: Box::new(points_to) },
+                    }) );
                 }
                 TokenType::Set => {
                     // set type declaration
@@ -1915,24 +1879,7 @@ impl Parser {
                         });
                     }
 
-                    let base_type_token = self.advance();
-                    let base_type = match base_type_token.token_type {
-                        TokenType::Integer => Type::Integer,
-                        TokenType::Real => Type::Real,
-                        TokenType::String => Type::String,
-                        TokenType::Char => Type::Char,
-                        TokenType::Boolean => Type::Boolean,
-                        _ => {
-                            return Err(CPSError {
-                                error_type: ErrorType::Syntax,
-                                message: "Expected a valid data type for set base type".to_string(),
-                                hint: None,
-                                line: base_type_token.line,
-                                column: base_type_token.column,
-                                source: Some(self.source.clone()),
-                            });
-                        }
-                    };
+                    let base_type = self.parse_type(TypeContext::SetBase)?;
 
                     return Ok(Ast::Stmt(Stmt::TypeDef {
                         type_definition: TypeDefinition::Set { name: identifier_token.lexeme, base_type: Box::new(base_type) },

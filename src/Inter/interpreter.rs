@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 // use std::fs::{self, File};
 use std::{cell::RefCell, rc::Rc};
@@ -7,7 +8,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::Inter::web::{WebContext, WebEvent};
 
 use crate::errortype::{CPSError, ErrorType};
-use crate::Inter::cps::{ArrayType, Environment, Function, Type, Value};
+use crate::Inter::cps::{ArrayType, Date, Environment, Function, Type, Value};
 use crate::Lexer::lexer::TokenType;
 use crate::Parser::ast::{Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, Stmt, PassingValue};
 use crate::Parser::parser::ast_to_expr;
@@ -521,63 +522,8 @@ impl Interpreter {
     }
 
     fn find_actual_type(&self, val: &Value, identifier: &String) -> Result<Type, CPSError> {
+        // Identifiers and functions are not assignable, so they keep their own messages
         match val {
-            Value::Integer(_) => Ok(Type::Integer),
-            Value::Real(_) => Ok(Type::Real),
-            Value::String(_) => Ok(Type::String),
-            Value::Boolean(_) => Ok(Type::Boolean),
-            Value::Char(_) => Ok(Type::Char),
-            Value::Array { array, lower_bound, bounds_2d } => {
-                let first_elem = array.first().ok_or_else(|| CPSError {
-                    error_type: crate::errortype::ErrorType::Runtime,
-                    message: format!("Cannot determine base type of empty array for variable '{}'", identifier),
-                    hint: Some("Ensure the array is not empty.".to_string()),
-                    line: 0,
-                    column: 0,
-                    source: None,
-                })?;
-
-                let base_type = match first_elem {
-                    Value::Integer(_) => Type::Integer,
-                    Value::Real(_) => Type::Real,
-                    Value::String(_) => Type::String,
-                    Value::Boolean(_) => Type::Boolean,
-                    Value::Char(_) => Type::Char,
-                    _ => {
-                        return Err(CPSError {
-                            error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!("Unsupported array element type for variable '{}'", identifier),
-                            hint: Some("Check the array's element types.".to_string()),
-                            line: 0,
-                            column: 0,
-                            source: None,
-                        });
-                    }
-                };
-                let bounds = match bounds_2d {
-                    Some((lower2, upper2)) => Some((
-                        Box::new(Expr::Literal(Value::Integer(*lower2 as i64))),
-                        Box::new(Expr::Literal(Value::Integer(*upper2 as i64)))
-                    )),
-                    None => None,
-                };
-
-                let upper_bound_val = if let Some((col_lb, col_ub)) = bounds_2d {
-                    let col_count = col_ub - col_lb + 1;
-                    let row_count = array.len() / col_count;
-                    *lower_bound + row_count - 1
-                } else {
-                    array.len() + *lower_bound - 1
-                };
-
-                Ok(Type::Array(ArrayType {
-                    lower_bound: Box::new(Expr::Literal(Value::Integer(*lower_bound as i64))),
-                    upper_bound: Box::new(Expr::Literal(Value::Integer(upper_bound_val as i64))),
-                    base_type: Box::new(base_type),
-                    bounds_2d: bounds,
-                }))
-
-            }
             Value::Identifier(_) => Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Cannot assign unresolved identifier to '{}'", identifier),
@@ -593,6 +539,10 @@ impl Interpreter {
                 line: 0,
                 column: 0,
                 source: None,
+            }),
+            other => other.type_of().map_err(|mut e| {
+                e.message = format!("{} (variable '{}')", e.message, identifier);
+                e
             }),
         }
     }
@@ -690,7 +640,7 @@ impl Interpreter {
             .borrow_mut()
             .define(identifier.to_owned(), Value::Integer(start_int.to_owned()))?;
 
-        // if step int is 0, panick
+        // if step int is 0, panic
         if step_int == 0 {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
@@ -728,29 +678,8 @@ impl Interpreter {
 
     fn evaluate_output_stmt(&mut self, target: &Expr) -> Result<(), CPSError> {
         let value = match self.evaluate_expr(target)? {
-            Value::String(s) => s,
-            Value::Integer(i) => i.to_string(),
-            Value::Real(r) => r.to_string(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Char(c) => c.to_string(),
             Value::Identifier(id) => match self.current_env.borrow().get(&id) {
-                Some(v) => match v {
-                    Value::String(s) => s,
-                    Value::Integer(i) => i.to_string(),
-                    Value::Real(r) => r.to_string(),
-                    Value::Boolean(b) => b.to_string(),
-                    Value::Char(c) => c.to_string(),
-                    _ => {
-                        return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: format!("Unsupported identifier type for output: {:?}", v),
-                            hint: None,
-                            line: 0,
-                            column: 0,
-                            source: None,
-                        });
-                    }
-                },
+                Some(v) => v.to_output_string("output")?,
                 None => {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
@@ -762,16 +691,7 @@ impl Interpreter {
                     });
                 }
             },
-            _ => {
-                return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Unsupported output type: {:?}", target),
-                    hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
-                });
-            }
+            other => other.to_output_string("output")?,
         };
         self.emit_output(value)
     }
@@ -792,121 +712,18 @@ impl Interpreter {
                         // get the type of the identifier
                         
                         let type_ = self.current_env.borrow_mut().get_type(&iden)?;
-                        match type_ {
-                            Type::Integer => {
-                                let int_value: i64 = input.parse().map_err(|_| CPSError {
-                                    error_type: ErrorType::Runtime,
-                                    message: format!("Expected an integer for variable '{}', got: {}", iden, input),
-                                    hint: None,
-                                    line: 0,
-                                    column: 0,
-                                    source: None,
-                                })?;
-                                self.current_env.borrow_mut()
-                                    .set(iden, Value::Integer(int_value))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::Real => {
-                                let real_value: f64 = input.parse().map_err(|_| CPSError {
-                                    error_type: ErrorType::Runtime,
-                                    message: format!("Expected a real number for variable '{}', got: {}", iden, input),
-                                    hint: None,
-                                    line: 0,
-                                    column: 0,
-                                    source: None,
-                                })?;
-                                self.current_env.borrow_mut()
-                                    .set(iden, Value::Real(real_value))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::Boolean => {
-                                let input_lower = input.to_lowercase();
-                                let bool_value = match input_lower.as_str() {
-                                    "true" => true,
-                                    "false" => false,
-                                    _ => {
-                                        return Err(CPSError {
-                                            error_type: ErrorType::Runtime,
-                                            message: format!("Expected 'true' or 'false' for variable '{}', got: {}", iden, input),
-                                            hint: None,
-                                            line: 0,
-                                            column: 0,
-                                            source: None,
-                                        });
-                                    }
-                                };
-                                self.current_env.borrow_mut()
-                                    .set(iden, Value::Boolean(bool_value))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::Char => {
-                                if input.chars().count() != 1 {
-                                    return Err(CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Expected a single character for variable '{}', got: {}", iden, input),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    });
-                                }
-                                self.current_env.borrow_mut()
-                                    .set(iden, Value::Char(input.chars().next().unwrap()))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::String => {
-                                // no validation needed for string
-                                self.current_env.borrow_mut()
-                                    .set(iden, Value::String(input))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to '{}': {}", iden, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            _ => {
-                                return Err(CPSError {
-                                    error_type: ErrorType::Runtime,
-                                    message: format!("Unsupported variable type for INPUT: {:?}", type_),
-                                    hint: None,
-                                    line: 0,
-                                    column: 0,
-                                    source: None,
-                                });
-                            }
-                        }
+                        let value = Value::from_input(&input, &type_, &format!("variable '{}'", iden))?;
 
+                        self.current_env.borrow_mut()
+                            .set(iden, value)
+                            .map_err(|e| CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Failed to assign input to '{}': {}", iden, e.message),
+                                hint: None,
+                                line: 0,
+                                column: 0,
+                                source: None,
+                            })?;
                     }
                     _ => {
                         return Err(CPSError {
@@ -1001,120 +818,19 @@ impl Interpreter {
                 let type_ = self.current_env.borrow_mut().get_type(&name)?;
                 match type_ {
                     Type::Array(arr_type) => {
-                        let base_type = &arr_type.base_type;
-                        match **base_type {
-                            Type::Integer => {
-                                let int_value: i64 = input.parse().map_err(|_| CPSError {
-                                    error_type: ErrorType::Runtime,
-                                    message: format!("Expected an integer for array element '{}[{}]', got: {}", name, index_int, input),
-                                    hint: None,
-                                    line: 0,
-                                    column: 0,
-                                    source: None,
-                                })?;
-                                self.current_env.borrow_mut()
-                                    .set_array_element(&name, index_int as usize, col_usize, Value::Integer(int_value))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::Real => {
-                                let real_value: f64 = input.parse().map_err(|_| CPSError {
-                                    error_type: ErrorType::Runtime,
-                                    message: format!("Expected a real number for array element '{}[{}]', got: {}", name, index_int, input),
-                                    hint: None,
-                                    line: 0,
-                                    column: 0,
-                                    source: None,
-                                })?;
-                                self.current_env.borrow_mut()
-                                    .set_array_element(&name, index_int as usize, col_usize, Value::Real(real_value))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::String => {
-                                self.current_env.borrow_mut()
-                                    .set_array_element(&name, index_int as usize, col_usize, Value::String(input))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::Boolean => {
-                                let input_lower = input.to_lowercase();
-                                let bool_value = match input_lower.as_str() {
-                                    "true" => true,
-                                    "false" => false,
-                                    _ => {
-                                        return Err(CPSError {
-                                            error_type: ErrorType::Runtime,
-                                            message: format!("Expected 'true' or 'false' for array element '{}[{}]', got: {}", name, index_int, input),
-                                            hint: None,
-                                            line: 0,
-                                            column: 0,
-                                            source: None,
-                                        });
-                                    }
-                                };
-                                self.current_env.borrow_mut()
-                                    .set_array_element(&name, index_int as usize, col_usize, Value::Boolean(bool_value))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            Type::Char => {
-                                if input.chars().count() != 1 {
-                                    return Err(CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Expected a single character for array element '{}[{}]', got: {}", name, index_int, input),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    });
-                                }
-                                self.current_env.borrow_mut()
-                                    .set_array_element(&name, index_int as usize, col_usize, Value::Char(input.chars().next().unwrap()))
-                                    .map_err(|e| CPSError {
-                                        error_type: ErrorType::Runtime,
-                                        message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
-                                        hint: None,
-                                        line: 0,
-                                        column: 0,
-                                        source: None,
-                                    })?;
-                            }
-                            _ => {
-                                return Err(CPSError {
-                                    error_type: ErrorType::Runtime,
-                                    message: format!("Unsupported array base type for INPUT: {:?}", base_type),
-                                    hint: None,
-                                    line: 0,
-                                    column: 0,
-                                    source: None,
-                                });
-                            }
-                        }
+                        let target = format!("array element '{}[{}]'", name, index_int);
+                        let value = Value::from_input(&input, &arr_type.base_type, &target)?;
+
+                        self.current_env.borrow_mut()
+                            .set_array_element(&name, index_int as usize, col_usize, value)
+                            .map_err(|e| CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Failed to assign input to array element '{}[{}]': {}", name, index_int, e.message),
+                                hint: None,
+                                line: 0,
+                                column: 0,
+                                source: None,
+                            })?;
                     }
                     _ => {
                         return Err(CPSError {
@@ -1229,33 +945,19 @@ impl Interpreter {
 
     fn values_equal(&self, a: &Value, b: &Value) -> Result<bool, CPSError> {
         let (a_converted, b_converted) = convert_values_to_compatible_types(a, b);
-
-        match (&a_converted, &b_converted) {
-            (Value::Integer(x), Value::Integer(y)) => Ok(x == y),
-            (Value::Real(x), Value::Real(y)) => Ok((x - y).abs() < f64::EPSILON),
-            (Value::String(x), Value::String(y)) => Ok(x == y),
-            (Value::Char(x), Value::Char(y)) => Ok(x == y),
-            (Value::Boolean(x), Value::Boolean(y)) => Ok(x == y),
-            _ => Ok(false),
-        }
+        Ok(values_are_equal(&a_converted, &b_converted).unwrap_or(false))
     }
 
     fn value_in_range(&mut self, value: &Value, start: &Value, end: &Value) -> Result<bool, CPSError> {
         let (value_conv, start_conv) = convert_values_to_compatible_types(value, start);
         let (value_final, end_conv) = convert_values_to_compatible_types(&value_conv, end);
 
-        match (&value_final, &start_conv, &end_conv) {
-            (Value::Integer(v), Value::Integer(s), Value::Integer(e)) => {
-                Ok(*v >= *s && *v <= *e)
-            }
-            (Value::Real(v), Value::Real(s), Value::Real(e)) => {
-                Ok(*v >= *s && *v <= *e)
-            }
-            (Value::String(v), Value::String(s), Value::String(e)) => {
-                Ok(v >= s && v <= e)
-            }
-            (Value::Char(v), Value::Char(s), Value::Char(e)) => {
-                Ok(*v >= *s && *v <= *e)
+        match (
+            compare_values(&value_final, &start_conv),
+            compare_values(&value_final, &end_conv),
+        ) {
+            (Some(from_start), Some(to_end)) => {
+                Ok(from_start != Ordering::Less && to_end != Ordering::Greater)
             }
             _ => Err(CPSError {
                 error_type: ErrorType::Runtime,
@@ -1454,19 +1156,7 @@ impl Interpreter {
                 }),
             };
             let value_to_write = self.evaluate_expr(value)?;
-            let line = match &value_to_write {
-                Value::Integer(i) => i.to_string(),
-                Value::Real(f) => f.to_string(),
-                Value::String(s) => s.clone(),
-                Value::Boolean(b) => b.to_string(),
-                Value::Char(c) => c.to_string(),
-                other => return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Unsupported value type for writing to file: {:?}", other),
-                    hint: None,
-                    line: 0, column: 0, source: None,
-                }),
-            };
+            let line = value_to_write.to_output_string("write")?;
             let ctx = ctx_rc.borrow();
             let mut vfs = ctx.virtual_fs.borrow_mut();
             if let Some(vfile) = vfs.get_mut(&filename_str) {
@@ -1516,6 +1206,68 @@ impl Interpreter {
         self.current_env.borrow_mut().writefile(&filename_str, &value_to_write)
     }
 
+    /// Stores one line read from a file into the target, converted to the
+    /// target's declared type the same way INPUT does.
+    fn assign_read_line(&mut self, target: &Expr, line: String) -> Result<(), CPSError> {
+        match target {
+            Expr::Literal(Value::Identifier(iden)) => {
+                let type_ = self.current_env.borrow_mut().get_type(iden)?;
+                let value = Value::from_input(&line, &type_, &format!("variable '{}'", iden))?;
+
+                self.current_env
+                    .borrow_mut()
+                    .set(iden, value)
+                    .map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to assign READFILE result to '{}': {}", iden, e.message),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    })
+            }
+            Expr::ArrayAccess { name, index, col } => {
+                let index_value = self.evaluate_expr(index)?;
+                let index_int = self.value_to_index(&index_value, name)?;
+                let col_int = match col {
+                    Some(col_expr) => {
+                        let col_value = self.evaluate_expr(col_expr)?;
+                        Some(self.value_to_index(&col_value, name)?)
+                    }
+                    None => None,
+                };
+
+                let var_type = self.current_env.borrow_mut().get_type(name)?;
+                let base_type = match var_type {
+                    Type::Array(arr_type) => *arr_type.base_type,
+                    _ => return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Identifier '{}' is not an array for READFILE statement", name),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    }),
+                };
+
+                let target_desc = format!("array element '{}[{}]'", name, index_int);
+                let value = Value::from_input(&line, &base_type, &target_desc)?;
+
+                self.current_env
+                    .borrow_mut()
+                    .set_array_element(name, index_int as usize, col_int.map(|c| c as usize), value)
+                    .map_err(|e| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Failed to assign READFILE result to array element: {}", e.message),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    })
+            }
+            _ => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("READFILE target must be a variable or array element, got: {:?}", target),
+                hint: None,
+                line: 0, column: 0, source: None,
+            }),
+        }
+    }
+
     fn evaluate_read_file(&mut self, filename: &Box<Expr>, target: &Box<Expr>) -> Result<(), CPSError> {
         if let Some(ctx_rc) = self.replay_ctx.clone() {
             let filename_value = self.evaluate_expr(filename)?;
@@ -1560,45 +1312,7 @@ impl Interpreter {
                     });
                 }
             };
-            return match target.as_ref() {
-                Expr::Literal(Value::Identifier(iden)) => {
-                    self.current_env
-                        .borrow_mut()
-                        .set(iden, Value::String(line))
-                        .map_err(|e| CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: format!("Failed to assign READFILE result to '{}': {}", iden, e.message),
-                            hint: None,
-                            line: 0, column: 0, source: None,
-                        })
-                }
-                Expr::ArrayAccess { name, index, col } => {
-                    let index_value = self.evaluate_expr(index)?;
-                    let index_int = self.value_to_index(&index_value, name)?;
-                    let col_int = match col {
-                        Some(col_expr) => {
-                            let col_value = self.evaluate_expr(col_expr)?;
-                            Some(self.value_to_index(&col_value, name)?)
-                        }
-                        None => None,
-                    };
-                    self.current_env
-                        .borrow_mut()
-                        .set_array_element(name, index_int as usize, col_int.map(|c| c as usize), Value::String(line))
-                        .map_err(|e| CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: format!("Failed to assign READFILE result to array element: {}", e.message),
-                            hint: None,
-                            line: 0, column: 0, source: None,
-                        })
-                }
-                _ => Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("READFILE target must be a variable or array element, got: {:?}", target),
-                    hint: None,
-                    line: 0, column: 0, source: None,
-                }),
-            };
+            return self.assign_read_line(target.as_ref(), line);
         }
         let filename_value = self.evaluate_expr(filename)?;
         let filename_str = match &filename_value {
@@ -1614,76 +1328,37 @@ impl Interpreter {
         let line = self.current_env.borrow_mut().readfile(&filename_str)?;
 
         // assign the line to the target variable
-        match target.as_ref() {
-            Expr::Literal(Value::Identifier(iden)) => {
-                self.current_env
-                    .borrow_mut()
-                    .set(iden, Value::String(line))
-                    .map_err(|e| CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Failed to assign READFILE result to '{}': {}", iden, e.message),
-                        hint: None,
-                        line: 0, column: 0, source: None,
-                    })
-            }
-            Expr::ArrayAccess { name, index, col } => {
-                let index_value = self.evaluate_expr(index)?;
-                let index_int = self.value_to_index(&index_value, name)?;
-                let col_int = match col {
-                    Some(col_expr) => {
-                        let col_value = self.evaluate_expr(col_expr)?;
-                        Some(self.value_to_index(&col_value, name)?)
-                    }
-                    None => None,
-                };
-                self.current_env
-                    .borrow_mut()
-                    .set_array_element(name, index_int as usize, col_int.map(|c| c as usize), Value::String(line))
-                    .map_err(|e| CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Failed to assign READFILE result to array element: {}", e.message),
-                        hint: None,
-                        line: 0, column: 0, source: None,
-                    })
-            }
-            _ => Err(CPSError {
+        self.assign_read_line(target.as_ref(), line)
+    }
+
+    /// Evaluates an array bound expression to an integer.
+    /// `what` names the bound in the error message, e.g. "lower".
+    fn evaluate_bound(&mut self, expr: &Expr, what: &str) -> Result<i64, CPSError> {
+        match self.evaluate_expr(expr)? {
+            Value::Integer(n) => Ok(n),
+            Value::Real(r) if r.fract() == 0.0 => Ok(r as i64),
+            other => Err(CPSError {
                 error_type: ErrorType::Runtime,
-                message: format!("READFILE target must be a variable or array element, got: {:?}", target),
-                hint: None,
+                message: format!("Array {} bound must be a whole number, got {:?}", what, other),
+                hint: Some("Array bounds must evaluate to INTEGER values.".to_string()),
                 line: 0, column: 0, source: None,
             }),
         }
     }
 
-
-
-    fn evaluate_declaration_stmt(&mut self, identifier: &String, type_: &Type) -> Result<(), CPSError> {
-        let inital_value = match type_ {
+    /// The value a variable of this type holds before anything is assigned to it.
+    fn default_value(&mut self, ty: &Type) -> Result<Value, CPSError> {
+        Ok(match ty {
             Type::Integer => Value::Integer(0),
-            Type::Real => Value::Real(0.0),
-            Type::String => Value::String(String::new()),
+            Type::Real    => Value::Real(0.0),
+            Type::String  => Value::String(String::new()),
             Type::Boolean => Value::Boolean(false),
-            Type::Char => Value::Char('\0'),
-            Type::Array(arr) => {
-                let lower = match self.evaluate_expr(&arr.lower_bound)? {
-                    Value::Integer(n) => n,
-                    Value::Real(r) => r as i64,
-                    _ => return Err(CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: "Array lower bound must be an integer".to_string(),
-                        hint: None, line: 0, column: 0, source: None,
-                    }),
-                };
+            Type::Char    => Value::Char('\0'),
+            Type::Date    => Value::Date(Date { day: 1, month: 1, year: 1900 }),
 
-                let upper = match self.evaluate_expr(&arr.upper_bound)? {
-                    Value::Integer(n) => n,
-                    Value::Real(r) => r as i64,
-                    _ => return Err(CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: "Array upper bound must be an integer".to_string(),
-                        hint: None, line: 0, column: 0, source: None,
-                    }),
-                };
+            Type::Array(arr) => {
+                let lower = self.evaluate_bound(&arr.lower_bound, "lower")?;
+                let upper = self.evaluate_bound(&arr.upper_bound, "upper")?;
 
                 if upper < lower {
                     return Err(CPSError {
@@ -1692,73 +1367,71 @@ impl Interpreter {
                         hint: None, line: 0, column: 0, source: None,
                     });
                 }
+                if lower < 0 {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Array lower bound {} cannot be negative", lower),
+                        hint: Some("Cambridge pseudocode arrays are usually indexed from 1.".to_string()),
+                        line: 0, column: 0, source: None,
+                    });
+                }
 
                 let row_count = (upper - lower + 1) as usize;
 
-                let bounds_2d = if let Some((col_lb_expr, col_ub_expr)) = &arr.bounds_2d {
-                    let col_lb = match self.evaluate_expr(col_lb_expr)? {
-                        Value::Integer(n) => n,
-                        Value::Real(r) => r as i64,
-                        _ => return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: "Array column lower bound must be an integer".to_string(),
-                            hint: None, line: 0, column: 0, source: None,
-                        }),
-                    };
-                    let col_ub = match self.evaluate_expr(col_ub_expr)? {
-                        Value::Integer(n) => n,
-                        Value::Real(r) => r as i64,
-                        _ => return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: "Array column upper bound must be an integer".to_string(),
-                            hint: None, line: 0, column: 0, source: None,
-                        }),
-                    };
-                    if col_ub < col_lb {
-                        return Err(CPSError {
-                            error_type: ErrorType::Runtime,
-                            message: format!("Column upper bound {} cannot be less than lower bound {}", col_ub, col_lb),
-                            hint: None, line: 0, column: 0, source: None,
-                        });
+                let bounds_2d = match &arr.bounds_2d {
+                    Some((col_lb_expr, col_ub_expr)) => {
+                        let col_lb = self.evaluate_bound(col_lb_expr, "column lower")?;
+                        let col_ub = self.evaluate_bound(col_ub_expr, "column upper")?;
+
+                        if col_ub < col_lb {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Column upper bound {} cannot be less than lower bound {}", col_ub, col_lb),
+                                hint: None, line: 0, column: 0, source: None,
+                            });
+                        }
+                        if col_lb < 0 {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Array column lower bound {} cannot be negative", col_lb),
+                                hint: Some("Cambridge pseudocode arrays are usually indexed from 1.".to_string()),
+                                line: 0, column: 0, source: None,
+                            });
+                        }
+                        Some((col_lb as usize, col_ub as usize))
                     }
-                    Some((col_lb as usize, col_ub as usize))
-                } else {
-                    None
+                    None => None,
                 };
 
-                let total_length = if let Some((col_lb, col_ub)) = &bounds_2d {
-                    row_count * (col_ub - col_lb + 1)
-                } else {
-                    row_count
+                let total_length = match &bounds_2d {
+                    Some((col_lb, col_ub)) => row_count * (col_ub - col_lb + 1),
+                    None => row_count,
                 };
 
-                let default_value = match &*arr.base_type {
-                    Type::Integer => Value::Integer(0),
-                    Type::Real => Value::Real(0.0),
-                    Type::String => Value::String(String::new()),
-                    Type::Boolean => Value::Boolean(false),
-                    Type::Char => Value::Char('\0'),
-                    _ => return Err(CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Unsupported array element type: {:?}", arr.base_type),
-                        hint: None, line: 0, column: 0, source: None,
-                    }),
-                };
+                let element = self.default_value(&arr.base_type)?;
 
                 Value::Array {
-                    array: vec![default_value; total_length],
+                    array: vec![element; total_length],
                     lower_bound: lower as usize,
                     bounds_2d,
                 }
-            },
-            _ => {
+            }
+
+            Type::Function => {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
-                    message: format!("Unsupported type for declaration: {:?}", type_),
-                    hint: None, line: 0, column: 0, source: None,
+                    message: "Cannot declare a variable of type Function".to_string(),
+                    hint: Some("Procedures and functions are declared with PROCEDURE/FUNCTION, not DECLARE.".to_string()),
+                    line: 0, column: 0, source: None,
                 });
             }
-        };
+        })
+    }
+
+
+
+    fn evaluate_declaration_stmt(&mut self, identifier: &String, type_: &Type) -> Result<(), CPSError> {
+        let inital_value = self.default_value(type_)?;
 
         self.current_env
             .borrow_mut()
@@ -2416,41 +2089,8 @@ impl Interpreter {
     }
 
     fn concatenate(&self, left: Value, right: Value) -> Result<Value, CPSError> {
-        let left_str = match left {
-            Value::String(s) => s,
-            Value::Integer(i) => i.to_string(),
-            Value::Real(r) => r.to_string(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Char(c) => c.to_string(),
-            _ => {
-                return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Unsupported type for concatenation: {:?}", left),
-                    hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
-                });
-            }
-        };
-
-        let right_str = match right {
-            Value::String(s) => s,
-            Value::Integer(i) => i.to_string(),
-            Value::Real(r) => r.to_string(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Char(c) => c.to_string(),
-            _ => {
-                return Err(CPSError {
-                    error_type: ErrorType::Runtime,
-                    message: format!("Unsupported type for concatenation: {:?}", right),
-                    hint: None,
-                    line: 0,
-                    column: 0,
-                    source: None,
-                });
-            }
-        };
+        let left_str = left.to_output_string("concatenate")?;
+        let right_str = right.to_output_string("concatenate")?;
 
         Ok(Value::String(format!("{}{}", left_str, right_str)))
     }
@@ -2458,107 +2098,41 @@ impl Interpreter {
 
 
     fn equal(&self, left: Value, right: Value) -> Result<Value, CPSError> {
-        match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l == r)),
-            (Value::Real(l), Value::Real(r)) => Ok(Value::Boolean(l == r)),
-            (Value::String(l), Value::String(r)) => Ok(Value::Boolean(l == r)),
-            (Value::Boolean(l), Value::Boolean(r)) => Ok(Value::Boolean(l == r)),
-            (Value::Char(l), Value::Char(r)) => Ok(Value::Boolean(l == r)),
-            _ => Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("Unsupported types for equality comparison: {:?} == {:?}", left, right),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            }),
-        }
+        values_are_equal(&left, &right)
+            .map(|o| Value::Boolean(o))
+            .ok_or_else(|| comparison_error("=", &left, &right))
     }
 
     fn not_equal(&self, left: Value, right: Value) -> Result<Value, CPSError> {
-        match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l != r)),
-            (Value::Real(l), Value::Real(r)) => Ok(Value::Boolean(l != r)),
-            (Value::String(l), Value::String(r)) => Ok(Value::Boolean(l != r)),
-            (Value::Boolean(l), Value::Boolean(r)) => Ok(Value::Boolean(l != r)),
-            (Value::Char(l), Value::Char(r)) => Ok(Value::Boolean(l != r)),
-            _ => Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("Unsupported types for inequality comparison: {:?} != {:?}", left, right),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            }),
-        }
+        values_are_equal(&left, &right)
+            .map(|o| Value::Boolean(!o))
+            .ok_or_else(|| comparison_error("<>", &left, &right))
     }
 
+
+
     fn less_than(&self, left: Value, right: Value) -> Result<Value, CPSError> {
-        match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l < r)),
-            (Value::Real(l), Value::Real(r)) => Ok(Value::Boolean(l < r)),
-            (Value::Integer(l), Value::Real(r)) => Ok(Value::Boolean((l as f64) < r)),
-            (Value::Real(l), Value::Integer(r)) => Ok(Value::Boolean(l < (r as f64))),
-            _ => Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("Unsupported types for less-than comparison: {:?} < {:?}", left, right),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            }),
-        }
+        compare_values(&left, &right)
+            .map(|o| Value::Boolean(o == Ordering::Less))
+            .ok_or_else(|| comparison_error("<", &left, &right))
     }
 
     fn less_equal(&self, left: Value, right: Value) -> Result<Value, CPSError> {
-        match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l <= r)),
-            (Value::Real(l), Value::Real(r)) => Ok(Value::Boolean(l <= r)),
-            (Value::Integer(l), Value::Real(r)) => Ok(Value::Boolean((l as f64) <= r)),
-            (Value::Real(l), Value::Integer(r)) => Ok(Value::Boolean(l <= (r as f64))),
-            _ => Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("Unsupported types for less-than-or-equal comparison: {:?} <= {:?}", left, right),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            }),
-        }
+        compare_values(&left, &right)
+            .map(|o| Value::Boolean(o == Ordering::Less || o == Ordering::Equal))
+            .ok_or_else(|| comparison_error("<=", &left, &right))
     }
 
     fn greater_than(&self, left: Value, right: Value) -> Result<Value, CPSError> {
-        match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l > r)),
-            (Value::Real(l), Value::Real(r)) => Ok(Value::Boolean(l > r)),
-            (Value::Integer(l), Value::Real(r)) => Ok(Value::Boolean((l as f64) > r)),
-            (Value::Real(l), Value::Integer(r)) => Ok(Value::Boolean(l > (r as f64))),
-            _ => Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("Unsupported types for greater-than comparison: {:?} > {:?}", left, right),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            }),
-        }
+        compare_values(&left, &right)
+            .map(|o| Value::Boolean(o == Ordering::Greater))
+            .ok_or_else(|| comparison_error(">", &left, &right))
     }
 
     fn greater_equal(&self, left: Value, right: Value) -> Result<Value, CPSError> {
-        match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l >= r)),
-            (Value::Real(l), Value::Real(r)) => Ok(Value::Boolean(l >= r)),
-            (Value::Integer(l), Value::Real(r)) => Ok(Value::Boolean((l as f64) >= r)),
-            (Value::Real(l), Value::Integer(r)) => Ok(Value::Boolean(l >= (r as f64))),
-            _ => Err(CPSError {
-                error_type: ErrorType::Runtime,
-                message: format!("Unsupported types for greater-than-or-equal comparison: {:?} >= {:?}", left, right),
-                hint: None,
-                line: 0,
-                column: 0,
-                source: None,
-            }),
-        }
+        compare_values(&left, &right)
+            .map(|o| Value::Boolean(o == Ordering::Greater || o == Ordering::Equal))
+            .ok_or_else(|| comparison_error(">=", &left, &right))
     }
 
     fn logical_and(&self, left: Value, right: Value) -> Result<Value, CPSError> {
@@ -2600,6 +2174,7 @@ impl Interpreter {
             Value::String(_) |
             Value::Boolean(_) |
             Value::Array { .. } |
+            Value::Date(_) |
             Value::Char(_) => {},
             Value::Identifier(iden) => {
                 match self.current_env 
@@ -2644,6 +2219,7 @@ fn check_if_type_can_be_converted(value: &Value, target_type: &Type) -> bool {
         (Value::Boolean(_), Type::Boolean) => true,
         (Value::Char(_), Type::Char) => true,
         (Value::Integer(_), Type::Real) => true,
+        (Value::Date(_), Type::Date) => true,
         (Value::Array { array, lower_bound: _, bounds_2d: _ }, Type::Array(arr_type)) => {
             match arr_type {
                 ArrayType { lower_bound: _, upper_bound: _, base_type , bounds_2d: _} => {
@@ -2677,6 +2253,7 @@ fn check_if_types_match_exactly(actual: &Type, expected: &Type) -> bool {
         (Type::String,  Type::String)  => true,
         (Type::Boolean, Type::Boolean) => true,
         (Type::Char,    Type::Char)    => true,
+        (Type::Date,    Type::Date)    => true,
         (Type::Array(a), Type::Array(b)) => {
             a.bounds_2d.is_some() == b.bounds_2d.is_some()
                 && check_if_types_match_exactly(&a.base_type, &b.base_type)
@@ -2733,5 +2310,57 @@ fn convert_values_to_base_type(value: &Value, target_type: &Type) -> Result<Valu
             Ok(Value::Integer(*r as i64))
         },
         _ => Ok(value.clone()),
+    }
+}
+
+fn comparison_error(op: &str, left: &Value, right: &Value) -> CPSError {
+    let type_name = |v: &Value| match v.type_of() {
+        Ok(t) => format!("{:?}", t).to_uppercase(),
+        Err(_) => "UNKNOWN".to_string(),
+    };
+
+
+    let (lt, rt) = (type_name(left), type_name(right));
+
+
+    let message = if lt == rt {
+        format!("Cannot compare two {} values using '{}'", lt, op)
+    } else {
+        format!("Cannot compare {} with {} using '{}'", lt, rt, op)
+    };
+
+    let hint = if matches!((left, right), (Value::Real(l), Value::Real(r)) if l.is_nan() || r.is_nan()) {
+        Some("A value that is not a number cannot be ordered".to_string())
+    } else if lt == rt {
+        Some(format!("{} values can only be compared with = and <>", lt))
+    } else {
+        Some("Both sides of a comparison must be the same type".to_string())
+    };
+
+    CPSError { error_type: ErrorType::Runtime, message, hint, line: 0, column: 0, source: None }
+}
+
+fn compare_values(left: &Value, right: &Value) -> Option<Ordering> {
+    match (left, right) {
+        (Value::Integer(l), Value::Integer(r)) => Some(l.cmp(r)),
+        (Value::Real(l), Value::Real(r))       => l.partial_cmp(r),
+        (Value::String(l), Value::String(r))   => Some(l.cmp(r)),
+        (Value::Char(l), Value::Char(r))       => Some(l.cmp(r)),
+        (Value::Date(l), Value::Date(r))       => {
+            Some((l.year, l.month, l.day).cmp(&(r.year, r.month, r.day)))
+        }
+        _ => None,
+    }
+}
+
+fn values_are_equal(left: &Value, right: &Value) -> Option<bool> {
+    match (left, right) {
+        (Value::Integer(l), Value::Integer(r)) => Some(l == r),
+        (Value::Real(l), Value::Real(r))       => Some(l == r),
+        (Value::String(l), Value::String(r))   => Some(l == r),
+        (Value::Boolean(l), Value::Boolean(r)) => Some(l == r),
+        (Value::Char(l), Value::Char(r))       => Some(l == r),
+        (Value::Date(l), Value::Date(r))       => Some(l == r),
+        _ => None,
     }
 }

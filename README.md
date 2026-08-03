@@ -197,7 +197,7 @@ Contributions are welcome! This project is being developed as part of learning c
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+GPL-3.0 License - see [LICENSE](LICENSE) file for details.
 
 ## 📧 Contact
 

@@ -17,6 +17,7 @@ pub enum Type {
     Char,
     Function,
     Array(ArrayType),
+    Date,
     // Record(String), 
     // Enum(String),
 }
@@ -29,6 +30,7 @@ impl std::fmt::Debug for Type {
             Type::String => write!(f, "String"),
             Type::Char => write!(f, "Char"),
             Type::Function => write!(f, "Function"),
+            Type::Date => write!(f, "Date"),
             Type::Array(array_type) => {
                 let lower = fmt_bound(&array_type.lower_bound);
                 let upper = fmt_bound(&array_type.upper_bound);
@@ -78,26 +80,157 @@ pub enum Value {
     Array { array: Vec<Value>, lower_bound: usize, bounds_2d: Option<(usize, usize)> }, 
     Identifier(String),
     Function(Function),
+    Date(Date),
     // Record(HashMap<String, Value>),
     // Enum { type_name: String, variant: String },
     // Null,  
 }
 
+impl Value {
+    pub fn type_of(&self) -> Result<Type, CPSError> {
+        Ok(match self {
+            Value::Integer(_)  => Type::Integer,
+            Value::Real(_)     => Type::Real,
+            Value::String(_)   => Type::String,
+            Value::Boolean(_)  => Type::Boolean,
+            Value::Char(_)     => Type::Char,
+            Value::Date(_)     => Type::Date,
+            Value::Function(_) => Type::Function,
+
+            Value::Identifier(name) => {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!(
+                        "Internal error: identifier '{}' reached type checking without being evaluated",
+                        name
+                    ),
+                    hint: Some(
+                        "Identifiers should be resolved to values before their type is queried."
+                            .to_string(),
+                    ),
+                    line: 0, column: 0, source: None,
+                });
+            }
+
+            Value::Array { array, lower_bound, bounds_2d } => {
+                let lit = |n: usize| Box::new(Expr::Literal(Value::Integer(n as i64)));
+
+                let base_type = array
+                    .first()
+                    .ok_or_else(|| CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: "Cannot determine the base type of an empty array".to_string(),
+                        hint: Some(
+                            "Assign a value to at least one element before using the array \
+                             somewhere its type is needed."
+                                .to_string(),
+                        ),
+                        line: 0, column: 0, source: None,
+                    })?
+                    .type_of()?;
+
+                let (upper_bound, cols) = match bounds_2d {
+                    Some((col_lb, col_ub)) => {
+                        if col_ub < col_lb {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!(
+                                    "Array column bounds are inverted: [{}:{}]",
+                                    col_lb, col_ub
+                                ),
+                                hint: Some(
+                                    "The lower bound must not exceed the upper bound.".to_string(),
+                                ),
+                                line: 0, column: 0, source: None,
+                            });
+                        }
+
+                        let col_count = col_ub - col_lb + 1; // >= 1, so the divide is safe
+                        let row_count = array.len() / col_count;
+
+                        if row_count == 0 {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!(
+                                    "2D array holds {} element(s), fewer than one full row of {}",
+                                    array.len(),
+                                    col_count
+                                ),
+                                hint: Some(
+                                    "The element count should be a multiple of the column count."
+                                        .to_string(),
+                                ),
+                                line: 0, column: 0, source: None,
+                            });
+                        }
+
+                        (lower_bound + row_count - 1, Some((lit(*col_lb), lit(*col_ub))))
+                    }
+                    None => {
+                        // the empty case already returned above, so len() >= 1 and this subtraction cannot underflow.
+                        (lower_bound + array.len() - 1, None)
+                    }
+                };
+
+                Type::Array(ArrayType {
+                    lower_bound: lit(*lower_bound),
+                    upper_bound: lit(upper_bound),
+                    bounds_2d: cols,
+                    base_type: Box::new(base_type),
+                })
+            }
+        })
+    }
+
+
+    fn days_in_month(month: u16, year: u16) -> u16 {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+            2 => 28,
+            _ => 0,
+        }
+    }
+
+    pub fn validate_date(day: u16, month: u16, year: u16) -> Result<(), String> { // TODO: Refactor this into impl Date?
+        const MONTH_NAMES: [&str; 12] = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        ];
+
+        if month < 1 || month > 12 {
+            return Err(format!("{:02} is not a valid month; months are 01 to 12", month));
+        }
+
+        let max_day = Value::days_in_month(month, year);
+        if day < 1 || day > max_day {
+            return Err(format!(
+                    "{:02} is not a valid day; {} {} has {} days",
+                    day, MONTH_NAMES[(month - 1) as usize], year, max_day
+            ));
+        }
+
+        Ok(())
+    }
+
+}
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Integer(n) => write!(f, "{}", n),
-            Value::Real(n) => write!(f, "{:?}", n),
-            Value::String(string_value) => write!(f, "\"{}\"", string_value),
+            Value::Integer(n) => write!(f, "INTEGER({})", n),
+            Value::Real(n) => write!(f, "REAL({:?})", n),
+            Value::String(string_value) => write!(f, "STRING(\"{}\")", string_value),
             Value::Boolean(b) => {
                 if *b {
-                    write!(f, "TRUE")
+                    write!(f, "BOOLEAN(TRUE)")
                 } else {
-                    write!(f, "FALSE")
+                    write!(f, "BOOLEAN(FALSE)")
                 }
             }
-            Value::Char(c) => write!(f, "'{}'", c),
+            Value::Char(c) => write!(f, "CHAR('{}')", c),
+            Value::Date(date) => write!(f, "DATE({:02}/{:02}/{:04})", date.day, date.month, date.year),
             Value::Array { array, lower_bound, bounds_2d } => {
                 let base = match array.first() {
                     Some(Value::Integer(_)) => "Integer",
@@ -105,6 +238,7 @@ impl std::fmt::Debug for Value {
                     Some(Value::String(_)) => "String",
                     Some(Value::Boolean(_)) => "Boolean",
                     Some(Value::Char(_)) => "Char",
+                    Some(Value::Date(_)) => "Date",
                     _ => "?",
                 };
                 match bounds_2d {
@@ -161,6 +295,111 @@ impl std::fmt::Debug for Value {
     }
 }
 
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Integer(n) => write!(f, "{}", n),
+            Value::Real(n) => write!(f, "{}", n),
+            Value::String(string_value) => write!(f, "{}", string_value),
+            Value::Char(c) => write!(f, "{}", c),
+            Value::Boolean(true) => write!(f, "TRUE"),
+            Value::Boolean(false) => write!(f, "FALSE"),
+            Value::Date(date) => write!(f, "{:02}/{:02}/{:04}", date.day, date.month, date.year),
+            Value::Array { .. } | Value::Function(_) | Value::Identifier(_) => {
+                write!(f, "{:?}", self)
+            }
+        }
+    }
+}
+
+impl Value {
+    pub fn to_output_string(&self, context: &str) -> Result<String, CPSError> {
+        match self {
+            Value::Array { .. } => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot {} a whole array", context),
+                hint: Some(
+                    "Use a loop to handle each element, e.g. FOR i <- 1 TO 3 / OUTPUT A[i] / NEXT i"
+                        .to_string(),
+                ),
+                line: 0, column: 0, source: None,
+            }),
+            Value::Function(_) => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot {} a procedure or function", context),
+                hint: None,
+                line: 0, column: 0, source: None,
+            }),
+            Value::Identifier(name) => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Undefined identifier: {}", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            }),
+            other => Ok(other.to_string()),
+        }
+    }
+
+    /// Turns a raw INPUT line into a value of the declared type.
+    /// `target` names the destination for the error message, e.g. "variable 'Age'".
+    pub fn from_input(text: &str, ty: &Type, target: &str) -> Result<Value, CPSError> {
+        match ty {
+            Type::String => Ok(Value::String(text.to_string())),
+
+            Type::Integer => text
+                .parse::<i64>()
+                .map(Value::Integer)
+                .map_err(|_| input_error("an integer", target, text)),
+
+            Type::Real => text
+                .parse::<f64>()
+                .map(Value::Real)
+                .map_err(|_| input_error("a real number", target, text)),
+
+            Type::Boolean => match text.to_lowercase().as_str() {
+                "true" => Ok(Value::Boolean(true)),
+                "false" => Ok(Value::Boolean(false)),
+                _ => Err(input_error("'true' or 'false'", target, text)),
+            },
+
+            Type::Char => {
+                if text.chars().count() != 1 {
+                    return Err(input_error("a single character", target, text));
+                }
+                Ok(Value::Char(text.chars().next().unwrap()))
+            }
+
+            Type::Date => match Date::parse(text) {
+                Ok(date) => Ok(Value::Date(date)),
+                Err(reason) => Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("'{}' is not a valid date for {}: {}", text, target, reason),
+                    hint: Some("Dates are written as dd/mm/yyyy.".to_owned()),
+                    line: 0, column: 0, source: None,
+                }),
+            },
+
+            _ => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Unsupported type for INPUT into {}: {:?}", target, ty),
+                hint: None,
+                line: 0, column: 0, source: None,
+            }),
+        }
+    }
+}
+
+fn input_error(expected: &str, target: &str, got: &str) -> CPSError {
+    CPSError {
+        error_type: ErrorType::Runtime,
+        message: format!("Expected {} for {}, got: {}", expected, target, got),
+        hint: None,
+        line: 0, column: 0, source: None,
+    }
+}
+
+
 #[derive(Debug)]
 pub struct CloneableFile(File);
 
@@ -189,6 +428,28 @@ pub struct Function {
     pub body: BlockStmt
 }
 
+#[derive(Clone, Debug, PartialEq)] 
+pub struct Date {
+    pub day: u16,
+    pub month: u16,
+    pub year: u16,
+}
+
+impl Date {
+    pub fn parse(text: &str) -> Result<Date, String> {
+        let parts: Vec<&str> = text.split('/').collect();
+        if parts.len() != 3
+            || parts[0].len() != 2 || parts[1].len() != 2 || parts[2].len() != 4
+            || !parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()))
+        {
+            return Err("dates are written as dd/mm/yyyy".to_string());
+        }
+        let (day, month, year) = (parts[0].parse().unwrap(), parts[1].parse().unwrap(), parts[2].parse().unwrap());
+        Value::validate_date(day, month, year)?;
+        Ok(Date { day, month, year })
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct Environment {
@@ -197,7 +458,7 @@ pub struct Environment {
     pub open_files: HashMap<String, OpenFile>, // track open files by variable name
     constants: HashSet<String>, // track constant variable names
     pub heap: Rc<RefCell<HashMap<usize, Value>>>, // for use in pointers and reference types in the future 
-    next_address: usize, // simple counter to assign unique addresses for reference types
+    next_address: Rc<RefCell<usize>>, // simple counter to assign unique addresses for reference types
 }
 
 impl Environment {
@@ -208,7 +469,7 @@ impl Environment {
             open_files: HashMap::new(),
             constants: HashSet::new(),
             heap: Rc::new(RefCell::new(HashMap::new())),
-            next_address: 0,
+            next_address: Rc::new(RefCell::new(0)),
         }));
         
         // declare builtin functions here
@@ -230,14 +491,13 @@ impl Environment {
     // }
 
     pub fn new_child(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
-        let next_address = parent.borrow().next_address; // start child environment's address space where parent left off
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
             parent: Some(parent.clone()),
             open_files: HashMap::new(),
             constants: HashSet::new(),
             heap: Rc::clone(&parent.borrow().heap), // share heap with parent for reference types
-            next_address: next_address,
+            next_address: Rc::clone(&parent.borrow().next_address),
         }))
     }
 
@@ -592,24 +852,7 @@ impl Environment {
 
             if let Some(handle) = &mut open_file.handle {
                 use std::io::Write;
-                let output = match value {
-                    Value::Integer(i) => i.to_string(),
-                    Value::Real(f) => f.to_string(),
-                    Value::String(s) => s.clone(),
-                    Value::Boolean(b) => b.to_string(),
-                    Value::Char(c) => c.to_string(),
-                    _ => return Err(CPSError {
-                        error_type: ErrorType::Runtime,
-                        message: format!("Unsupported value type for writing to file '{}'", filename),
-                        hint: None,
-                        line: 0,
-                        column: 0,
-                        source: None,
-                    }),
-                    // Value::Array { .. } => format!("{:?}", value), // simple debug output for arrays
-                    // Value::Identifier(id) => id.clone(),
-                    // Value::Function(_) => "<function>".to_string(),
-                };
+                let output = value.to_output_string("write")?;
                 handle.0.write_all(format!("{}\n", output).as_bytes()).map_err(|e| CPSError {
                     error_type: ErrorType::Runtime,
                     message: format!("Failed to write to file '{}': {}", filename, e),
@@ -732,66 +975,10 @@ impl Environment {
                 hint: None,
                 line: 0, column: 0, source: None,
             })?;
-            let var_type = match value {
-                Value::Integer(_) => Type::Integer,
-                Value::Real(_) => Type::Real,
-                Value::String(_) => Type::String,
-                Value::Boolean(_) => Type::Boolean,
-                Value::Char(_) => Type::Char,
-                Value::Array { array, lower_bound, bounds_2d } => {
-                    let (upper_bound, bounds_2d_type) = if let Some((col_lb, col_ub)) = bounds_2d {
-                        let col_count = col_ub - col_lb + 1;
-                        let row_count = array.len() / col_count;
-                        let row_ub = lower_bound + row_count - 1;
-                        (
-                            row_ub as i64,
-                            Some((
-                                    Box::new(Expr::Literal(Value::Integer(col_lb as i64))),
-                                    Box::new(Expr::Literal(Value::Integer(col_ub as i64))),
-                            ))
-                        )
-                    } else {
-                        ((array.len() + lower_bound - 1) as i64, None)
-                    };
-
-                    let base_type = if let Some(first_elem) = array.first() {
-                        match first_elem {
-                            Value::Integer(_) => Type::Integer,
-                            Value::Real(_) => Type::Real,
-                            Value::String(_) => Type::String,
-                            Value::Boolean(_) => Type::Boolean,
-                            Value::Char(_) => Type::Char,
-                            Value::Array { .. } => {
-                                return Err(CPSError {
-                                    error_type: crate::errortype::ErrorType::Runtime,
-                                    message: format!("Nested arrays are not supported for '{}'", name),
-                                    hint: None,
-                                    line: 0, column: 0, source: None,
-                                });
-                            }
-                            Value::Identifier(_) => Type::String,
-                            Value::Function(_) => Type::Function,
-                        }
-                    } else {
-                        return Err(CPSError {
-                            error_type: crate::errortype::ErrorType::Runtime,
-                            message: format!("Cannot determine base type of empty array '{}'", name),
-                            hint: Some("Consider initializing the array with a default value.".to_string()),
-                            line: 0, column: 0, source: None,
-                        });
-                    };
-
-                    Type::Array(ArrayType {
-                        lower_bound: Box::new(Expr::Literal(Value::Integer(lower_bound as i64))),
-                        upper_bound: Box::new(Expr::Literal(Value::Integer(upper_bound))),
-                        bounds_2d: bounds_2d_type,
-                        base_type: Box::new(base_type),
-                    })
-                },
-                Value::Identifier(_) => Type::String,
-                Value::Function(_) => Type::Function,
-            };
-            return Ok(var_type);
+            return value.type_of().map_err(|mut e| {
+                e.message = format!("{} (variable '{}')", e.message, name);
+                e
+            });
         }
 
         match &self.parent {
@@ -842,7 +1029,7 @@ impl Environment {
         }
 
         // check if it's an array 
-        let current_addr = self.next_address;
+        let current_addr = *self.next_address.borrow();
         self.heap.borrow_mut().insert(current_addr, value.clone());
         self.bindings.insert(name, current_addr);
 
@@ -855,7 +1042,7 @@ impl Environment {
         //     _ => self.next_address += 1, // reserve one address for non-array values
         // }
 
-        self.next_address += 1;
+        *self.next_address.borrow_mut() += 1;
 
 
 
