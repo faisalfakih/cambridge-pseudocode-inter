@@ -58,6 +58,8 @@ pub enum StepEvent {
 pub struct StepInterpreter {
     /// Pre-parsed AST — shared by all replay runs without cloning.
     ast: Vec<Ast>,
+    /// The program text, handed to each replay so runtime errors can show the offending line.
+    source: String,
     /// Inputs supplied by the user, in order.
     input_log: Vec<String>,
     /// How many OUTPUT events have already been served to the caller.
@@ -85,6 +87,7 @@ impl StepInterpreter {
 
         Ok(StepInterpreter {
             ast,
+            source: source.to_string(),
             input_log: Vec::new(),
             output_pos: 0,
             rand_log: Vec::new(),
@@ -114,7 +117,7 @@ impl StepInterpreter {
             virtual_fs: Rc::clone(&vfs_rc),
         }));
 
-        let mut interp = Interpreter::new_replay(Rc::clone(&ctx));
+        let mut interp = Interpreter::new_replay(self.source.clone(), Rc::clone(&ctx));
         let result = interp.interpret_slice(&self.ast);
 
         // Save any newly generated RAND values back so future replays are

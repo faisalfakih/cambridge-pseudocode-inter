@@ -29,6 +29,24 @@ pub struct CPSError {
 
 impl Error for CPSError {}
 
+impl CPSError {
+    // attach the position of the statement the error has unwinded through, keeping whatever position was already recorded (the innermost one is the most specific).
+    #[inline]
+    pub fn locate(mut self, line: usize, column: usize, source: &str) -> Self {
+        if matches!(self.error_type, ErrorType::Return(_) | ErrorType::StepOutput(_) | ErrorType::StepNeedsInput(_)) {
+            return self;
+        }
+        if self.line == 0 && self.column == 0 {
+            self.line = line;
+            self.column = column;
+        }
+        if self.source.is_none() {
+            self.source = Some(source.to_string());
+        }
+        self
+    }
+}
+
 impl std::fmt::Display for ErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -65,12 +83,12 @@ impl std::fmt::Display for CPSError {
             
             if self.line > 0 && self.line <= lines.len() {
                 let error_line = lines[self.line - 1];
-                let remaining = error_line.len() - (self.column - 1);
-                let underline_length = remaining.min(error_line.len());
-                
+                let start = self.column.saturating_sub(1).min(error_line.len());
+                let underline_length = (error_line.len() - start).max(1);
+
                 writeln!(f, "{}", error_line)?;
                 writeln!(f, "{}{}",
-                    " ".repeat(self.column - 1),
+                    " ".repeat(start),
                     "^".repeat(underline_length).bright_red().bold()
                 )?;
             }

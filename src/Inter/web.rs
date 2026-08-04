@@ -64,7 +64,7 @@ pub fn run_web(
             }
         };
 
-        let mut parser = Parser::new(tokens, source);
+        let mut parser = Parser::new(tokens, source.clone());
         let ast = match parser.parse_statements() {
             Ok(a) => a,
             Err(e) => {
@@ -73,7 +73,7 @@ pub fn run_web(
             }
         };
 
-        let mut interpreter = Interpreter::new_web(WebContext {
+        let mut interpreter = Interpreter::new_web(source, WebContext {
             event_tx: event_tx.clone(),
             input_rx,
         });

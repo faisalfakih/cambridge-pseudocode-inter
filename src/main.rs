@@ -14,7 +14,7 @@ use crate::Parser::parser;
 fn main() {
     let matches = Command::new("cps")
         .author("Faisal Fakih")
-        .version("0.1.17")
+        .version("0.1.18")
         .about("Interpreter for the Cambridge Pseudocode Language")
         .arg(
             Arg::new("file")
@@ -106,7 +106,7 @@ fn main() {
     }
 
     // interpret
-    let mut interpreter = Inter::interpreter::Interpreter::new();
+    let mut interpreter = Inter::interpreter::Interpreter::new(contents);
     if let Err(e) = interpreter.interpret(ast) {
         eprintln!("{}", e);
         if show_time {

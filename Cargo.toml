@@ -1,6 +1,6 @@
 [package]
 name = "cambridge-pseudocode-interpreter"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 authors = ["Faisal Fakih <me@faisalfakih.com>"]
 description = "A Rust-based interpreter for Cambridge International AS & A Level Computer Science (9618) pseudocode"
