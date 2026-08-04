@@ -1227,10 +1227,30 @@ impl Interpreter {
             Expr::ArrayAccess { name, index, col } => {
                 let index_value = self.evaluate_expr(index)?;
                 let index_int = self.value_to_index(&index_value, name)?;
+                if index_int < 0 {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Array index cannot be negative for '{}': {}", name, index_int),
+                        hint: None,
+                        line: 0, column: 0, source: None,
+                    });
+                }
                 let col_int = match col {
                     Some(col_expr) => {
                         let col_value = self.evaluate_expr(col_expr)?;
-                        Some(self.value_to_index(&col_value, name)?)
+                        let c =  self.value_to_index(&col_value, name)?;
+
+                        if c < 0 {
+                            return Err(CPSError {
+                                error_type: ErrorType::Runtime,
+                                message: format!("Column index cannot be negative for '{}': {}", name, c),
+                                hint: None,
+                                line: 0, column: 0, source: None,
+                            });
+                        }
+                        Some(c)
+
+
                     }
                     None => None,
                 };
@@ -1376,7 +1396,19 @@ impl Interpreter {
                     });
                 }
 
-                let row_count = (upper - lower + 1) as usize;
+                // let row_count = (upper - lower + 1) as usize;
+                let row_count = match upper.checked_sub(lower)
+                    .and_then(|num| num.checked_add(1))
+                    .and_then(|num| usize::try_from(num).ok()) {
+                        Some(n) => n,
+                        None => 
+                        {
+                            return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Array size [{}:{}] is too large", lower, upper),
+                        hint: None, line: 0, column: 0, source: None,
+                    })}
+                    };
 
                 let bounds_2d = match &arr.bounds_2d {
                     Some((col_lb_expr, col_ub_expr)) => {
@@ -1403,10 +1435,30 @@ impl Interpreter {
                     None => None,
                 };
 
+                const MAX_ELEMENTS: usize = 16_000_000;
                 let total_length = match &bounds_2d {
-                    Some((col_lb, col_ub)) => row_count * (col_ub - col_lb + 1),
+                    Some((col_lb, col_ub)) => row_count
+                        .checked_mul(col_ub - col_lb + 1)
+                        .ok_or_else(|| CPSError {
+                            error_type: ErrorType::Runtime,
+                            message: "Array size is too large".to_string(),
+                            hint: None, line: 0, column: 0, source: None,
+                        })?,
                     None => row_count,
                 };
+                if total_length > MAX_ELEMENTS {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Array of {} elements exceeds the supported limit", total_length),
+                        hint: Some("Reduce the array bounds.".to_string()),
+                        line: 0, column: 0, source: None,
+                    });
+                }
+
+                // let total_length = match &bounds_2d {
+                //     Some((col_lb, col_ub)) => row_count * (col_ub - col_lb + 1),
+                //     None => row_count,
+                // };
 
                 let element = self.default_value(&arr.base_type)?;
 

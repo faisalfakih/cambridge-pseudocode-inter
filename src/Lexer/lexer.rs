@@ -620,15 +620,15 @@ impl Lexer {
         }
 
         // if the number is 2 digits long, then check if its a date literal
-        // date literals are in the form of dd/mm/yy in cambridge pseudocode
+        // date literals are in the form of dd/mm/yyyy in cambridge pseudocode
         // if not, then just return the number literal
         // TODO: If there is an eventual update to Rust 2024 or later, then switch to let chains and remove this mess
         if lexeme.len() == 2 && lexeme.chars().all(|c| c.is_ascii_digit()) {
             if let Some(c) = self.peek(0) {
-                if c == '/' { 
+                if c == '/' {
                     // check if its a date literal
                     let (is_date_literal, date_lexeme) = self.handle_date_literal(&lexeme)?;
-                    if !is_date_literal {
+                    if !is_date_literal && date_lexeme == "".to_owned() {
                         Ok(Token::new(lexeme, TokenType::NumberLiteral, start_line, start_column))
                     } else {
                         Ok(Token::new(date_lexeme, TokenType::DateLiteral, start_line, start_column))
@@ -643,7 +643,7 @@ impl Lexer {
             Ok(Token::new(lexeme, TokenType::NumberLiteral, start_line, start_column))
         }
     }
-    
+
     /// return true and the lexeme if its a date literal, otherwise, return false and an empty string
     fn handle_date_literal(&mut self, first_num_lexeme: &str) -> Result<(bool, String), CPSError> {
         let digit1;
@@ -659,7 +659,7 @@ impl Lexer {
                 // not a number if either are not numeric
                 if !d1.is_ascii_digit() || !d2.is_ascii_digit() {
                     return Ok((false, "".to_owned()));
-                } 
+                }
                 digit1 = d1;
                 digit2 = d2;
             } else {
@@ -675,7 +675,7 @@ impl Lexer {
             if c != '/' {
                 return Ok((false, "".to_owned()));
             }
-        } 
+        }
 
         // check for the last 4 digits
         if let Some(d3) = self.peek(4) {
@@ -715,18 +715,23 @@ impl Lexer {
         let month: u16 = format!("{}{}", digit1, digit2).parse().unwrap_or(0);
         let year: u16 = format!("{}{}{}{}", digit3, digit4, digit5, digit6).parse().unwrap_or(0);
 
-        if let Err(reason) = Value::validate_date(day, month, year) {
-            return Err(CPSError {
-                error_type: ErrorType::Lexical,
-                message: format!("'{}' is not a valid date: {}", 
-                    format!("{:02}/{:02}/{:04}", day, month, year), reason),
-                    hint: Some("Dates are written as dd/mm/yyyy.".to_string()),
-                    line: self.line,
-                    column: self.column - 2,
-                    source: Some(self.source.clone()),
-            });
-        }
 
+
+
+        if let Err(_) = Value::validate_date(day, month, year) {
+            // return Err(CPSError {
+            //     error_type: ErrorType::Lexical,
+            //     message: format!("'{}' is not a valid date: {}",
+            //         format!("{:02}/{:02}/{:04}", day, month, year), reason),
+            //         hint: Some("Dates are written as dd/mm/yyyy.".to_string()),
+            //         line: self.line,
+            //         column: self.column - 2,
+            //         source: Some(self.source.clone()),
+            // });
+
+            // instead of returning an error, assume they meant an arithmatic operation rather than a date
+            return Ok((false, "".to_owned())) // this will cause the process to be repeated on the second integer aswell, but it doesnt matter as its fast
+        }
 
         self.position += 8;
         self.column += 8;
