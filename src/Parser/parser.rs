@@ -444,6 +444,14 @@ impl Parser {
     }
 
     fn parse_statement(&mut self, token: Token) -> Result<Ast, (CPSError, bool)> {
+        let (line, column) = (token.line, token.column);
+        match self.parse_statement_inner(token)? {
+            Ast::Stmt(stmt) => Ok(Ast::Stmt(Stmt::At { line, column, inner: Box::new(stmt) })),
+            other => Ok(other),
+        }
+    }
+
+    fn parse_statement_inner(&mut self, token: Token) -> Result<Ast, (CPSError, bool)> {
         match token.token_type {
             TokenType::If => self.parse_if_statement().map_err(|e| (e, false)),
             TokenType::Case => self.parse_case_statement().map_err(|e| (e, false)),

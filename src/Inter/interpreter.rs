@@ -59,6 +59,7 @@ pub struct ReplayContext {
 #[derive(Debug)]
 pub struct Interpreter {
     current_env: Rc<RefCell<Environment>>,
+    source: String,
     /// Thread+channel bridge for the server-side web mode (non-WASM only).
     #[cfg(not(target_arch = "wasm32"))]
     web_ctx: Option<WebContext>,
@@ -67,9 +68,10 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
-    pub fn new() -> Self {
+    pub fn new(source: String) -> Self {
         Interpreter {
             current_env: Environment::new_global(),
+            source,
             #[cfg(not(target_arch = "wasm32"))]
             web_ctx: None,
             replay_ctx: None,
@@ -79,17 +81,19 @@ impl Interpreter {
     /// Create an interpreter that communicates with a web client via channels
     /// instead of using stdin/stdout.  Not available in WASM builds.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new_web(ctx: WebContext) -> Self {
+    pub fn new_web(source: String, ctx: WebContext) -> Self {
         Interpreter {
             current_env: Environment::new_global(),
+            source,
             web_ctx: Some(ctx),
             replay_ctx: None,
         }
     }
 
-    pub fn new_replay(ctx: Rc<RefCell<ReplayContext>>) -> Self {
+    pub fn new_replay(source: String, ctx: Rc<RefCell<ReplayContext>>) -> Self {
         Interpreter {
             current_env: Environment::new_global(),
+            source,
             #[cfg(not(target_arch = "wasm32"))]
             web_ctx: None,
             replay_ctx: Some(ctx),
@@ -255,7 +259,16 @@ impl Interpreter {
     }
 
     fn evaluate_stmt(&mut self, statement: &crate::Parser::ast::Stmt) -> Result<(), CPSError> {
-        match statement {
+        // Stmts are returned as At to show where in the file the error has occured so that user errors are returned at nicely.
+        // Unwrapped in a loop rather than in its own arm so a statement costs no extra stack frame.
+        let mut statement = statement;
+        let mut position = None;
+        while let Stmt::At { line, column, inner } = statement {
+            position = Some((*line, *column));
+            statement = inner;
+        }
+
+        let result = match statement {
             Stmt::Output { target } => self.evaluate_output_stmt(target),
             Stmt::Decleration { identifier, type_ } => self.evaluate_declaration_stmt(identifier, type_),
             Stmt::Assignment { identifier, array_index, value } => self.evaluate_assignment_stmt(identifier, value, array_index),
@@ -266,43 +279,30 @@ impl Interpreter {
             Stmt::Repeat { body, until } => self.evaluate_repeat_stmt(until, body),
             Stmt::Procedure { name, parameters, body } => self.evaluate_procedure(name, parameters, body),
             Stmt::Function { name, parameters, return_type, body } => self.evaluate_function(name, parameters, return_type.to_owned(), body),
-            Stmt::Call { name, arguments } => {
-                self.evaluate_call(name, arguments)?;
-                Ok(())
-            },
-            Stmt::Block(block) => {
-                for stmt in &block.statements {
-                    self.evaluate_stmt(stmt)?;
-                }
-                Ok(())
-            }
+            Stmt::Call { name, arguments } => self.evaluate_call(name, arguments).map(|_| ()),
+            Stmt::Block(block) => block.statements.iter().try_for_each(|stmt| self.evaluate_stmt(stmt)),
             Stmt::For { identifier, start, end, body, step } => self.evaluate_for(identifier, start, end, body, step),
             Stmt::OpenFile { filename, mode  } => self.evaluate_open_file(filename, mode),
             Stmt::CloseFile { filename } => self.evaluate_close_file(filename),
             Stmt::WriteFile { filename, value } => self.evaluate_write_file(filename, value),
             Stmt::ReadFile { filename, target } => self.evaluate_read_file(filename, target),
-            Stmt::Return { value } => {
-                let val = self.evaluate_expr(value)?;
-                return Err(CPSError {
+            Stmt::Return { value } => match self.evaluate_expr(value) {
+                Ok(val) => Err(CPSError {
                     error_type: ErrorType::Return(val),
                     message: String::new(),
                     hint: None,
                     line: 0, column: 0, source: None,
-                });
-            }
+                }),
+                Err(e) => Err(e),
+            },
             Stmt::Constant { identifier, value } => self.evaluate_constant(identifier, value),
             Stmt::TypeDef { type_definition } => todo!(),
-            // _ => {
-            //     return Err(CPSError {
-            //         error_type: ErrorType::Runtime,
-            //         message: format!("Unsupported statement in interpreter: {:?}", statement),
-            //         hint: None,
-            //         line: 0,
-            //         column: 0,
-            //         source: None,
-            //     });
-            // }
+            Stmt::At { .. } => unreachable!(),
+        };
 
+        match position {
+            Some((line, column)) => result.map_err(|e| e.locate(line, column, &self.source)),
+            None => result,
         }
     }
 

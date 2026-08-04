@@ -93,6 +93,7 @@ pub enum Stmt {
     ReadFile { filename: Box<Expr>, target: Box<Expr> },
     WriteFile { filename: Box<Expr>, value: Box<Expr> },
     TypeDef { type_definition: TypeDefinition },
+    At { line: usize, column: usize, inner: Box<Stmt> }, // wraps a statement with the position of its first token so that runtime errors can be located.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -368,6 +369,7 @@ impl Stmt {
                     }
                 }
             }
+            Stmt::At { inner, .. } => inner.to_prefix(indent),
         }
     }
 }
