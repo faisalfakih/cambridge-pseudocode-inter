@@ -403,7 +403,7 @@ impl Value {
             },
 
             Type::Enum(name) => {
-                let is_valid_enum = environment.borrow().check_if_valid_enum_value(name, &text.to_owned());
+                let is_valid_enum = environment.borrow().check_if_valid_enum_value(name, text);
 
                 if is_valid_enum {
                     Ok(Value::Enum { type_name: name.into(), variant: Some(text.into()) })
@@ -492,6 +492,7 @@ pub struct Environment {
     pub heap: Rc<RefCell<HashMap<usize, Value>>>, // for use in pointers and reference types in the future 
     next_address: Rc<RefCell<usize>>, // simple counter to assign unique addresses for reference types
     types: HashMap<String, Type>, // defined custom types within the environment
+    enum_variants: HashMap<String, Vec<String>>, // the values of each enumerated type, in the order they were declared
 }
 
 impl Environment {
@@ -504,6 +505,7 @@ impl Environment {
             heap: Rc::new(RefCell::new(HashMap::new())),
             next_address: Rc::new(RefCell::new(0)),
             types: HashMap::new(),
+            enum_variants: HashMap::new(),
         }));
         
         // declare builtin functions here
@@ -533,6 +535,7 @@ impl Environment {
             heap: Rc::clone(&parent.borrow().heap), // share heap with parent for reference types
             next_address: Rc::clone(&parent.borrow().next_address),
             types: HashMap::new(),
+            enum_variants: HashMap::new(),
         }))
     }
 
@@ -1051,8 +1054,8 @@ impl Environment {
         }
     }
 
-    pub fn define_enum(&mut self, name: &String, variants: &Vec<String>) -> Result<(), CPSError> {
-        if self.types.iter().any(|(n, _)| n == name) {
+    pub fn define_enum(&mut self, name: &str, variants: &[String]) -> Result<(), CPSError> {
+        if self.types.contains_key(name) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("The type '{}' is already defined", name),
@@ -1061,21 +1064,38 @@ impl Environment {
             })
         }
 
-        for variant in variants.iter() {
-            self.declare_constant(variant, &Value::Enum { type_name: name.into(), variant: Some(variant.into()) })?;
+        // checked up front so a rejected declaration leaves nothing behind
+        for (i, variant) in variants.iter().enumerate() {
+            if variants[..i].contains(variant) {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("'{}' is listed twice in the type '{}'", variant, name),
+                    hint: Some("Every value of an enumerated type needs a name of its own.".to_owned()),
+                    line: 0, column: 0, source: None,
+                })
+            }
         }
 
-        let enum_type = Type::Enum(name.clone());
+        for variant in variants.iter() {
+            self.declare_constant(variant, &Value::Enum { type_name: name.to_owned(), variant: Some(variant.to_owned()) })?;
+        }
 
-
-        self.types.insert(name.to_owned(), enum_type);
+        self.types.insert(name.to_owned(), Type::Enum(name.to_owned()));
+        self.enum_variants.insert(name.to_owned(), variants.to_vec());
 
         Ok(())
     }
 
 
-    pub fn check_if_valid_enum_value(&self, name: &String, variant: &String) -> bool {
-        matches!(self.get(variant), Some(Value::Enum { type_name, .. }) if &type_name == name)
+    pub fn check_if_valid_enum_value(&self, name: &str, variant: &str) -> bool {
+        if let Some(variants) = self.enum_variants.get(name) {
+            return variants.iter().any(|v| v == variant);
+        }
+
+        match &self.parent {
+            Some(parent_rc) => parent_rc.borrow().check_if_valid_enum_value(name, variant),
+            None => false,
+        }
     }
 
     pub fn find_type_of_named_type(&self, name: &String) -> Result<Type, CPSError> {

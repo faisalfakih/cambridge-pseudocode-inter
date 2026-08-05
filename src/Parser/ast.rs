@@ -371,7 +371,8 @@ impl Stmt {
             // }
             Stmt::EnumDeclaration { identifier, variants: values } => {
                 let vals = values.join(", ");
-                format!("ENUM TYPE {} = ({})", identifier, vals)
+                format!("{}ENUM TYPE {} = ({})", indent_str, identifier, vals)
+
             }
             Stmt::At { inner, .. } => inner.to_prefix(indent),
         }

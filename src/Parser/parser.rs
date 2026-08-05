@@ -1844,8 +1844,9 @@ impl Parser {
             let iden = self.advance();
             if iden.token_type != TokenType::Identifier {
                 return Err(CPSError { error_type: ErrorType::Syntax, 
-                    message: "Expected enum name in procedure declaration".to_string(), hint: None,
-                    line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
+                    message: "Expected an enum value name in the type declaration".to_string(),
+                    hint: Some("Enum values are identifiers separated by commas.".to_string()),
+                    line: iden.line, column: iden.column, source: Some(self.source.clone()) });
             }
 
             enum_values.push(iden.lexeme);
@@ -1859,7 +1860,15 @@ impl Parser {
         }
 
         // consume the ')'
-        self.advance();
+        let close_paren = self.advance();
+        if close_paren.token_type != TokenType::RParen {
+            return Err(CPSError { error_type: ErrorType::Syntax,
+                message: "Expected ')' after the enum values.".to_string(),
+                hint: Some("Close the opening paranthesis '(' with a closing one ')'".to_string()),
+                line: close_paren.line, column: close_paren.column, source: Some(self.source.clone()) });
+        } 
+
+        // no need to check for whether there are actually any enum varients, an empty Enum should be ok
 
         Ok(Ast::Stmt(Stmt::EnumDeclaration { identifier: identifier.lexeme, variants: enum_values }))
     }
@@ -1877,7 +1886,7 @@ pub fn ast_to_expr(ast: Ast) -> Result<Expr, CPSError> {
             hint: Some("Make sure to provide a valid expression".to_string()),
             line: 0,
             column: 0,
-            source: None, // TOOD: <- fix this
+            source: None,
         }),
     }
 }
