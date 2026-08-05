@@ -1610,6 +1610,7 @@ impl Parser {
             // Where arrays are not permitted the guard fails and the '_' arm
             // below reports it.
             TokenType::Array if context.allows_array() => self.parse_array_type()?,
+            TokenType::Identifier => Type::Named(type_token.lexeme), 
 
             _ => {
                 let hint = if type_token.token_type == TokenType::Array {
@@ -1806,188 +1807,72 @@ impl Parser {
         }));
     }
 
-
     fn parse_type_declaration(&mut self) -> Result<Ast, CPSError> {
-        let _ = self.advance(); // consume 'type'
+        let _ = self.advance();
+        // if self.scope != 0 {
+        //     return Err(CPSError { error_type: ErrorType::Syntax,
+        //         message: "A TYPE declaration must be written in the global scope".to_string(),
+        //         hint: Some("This is stricter than the 9618 guide, but declaring types at the top of the program, outside any block, procedure or function, keeps them usable everywhere.".to_string()),
+        //         line: type_token.line, column: type_token.column, source: Some(self.source.clone()) });
+        // }
 
-        let identifier_token = self.advance();
-        if identifier_token.token_type != TokenType::Identifier {
-            return Err(CPSError {
-                error_type: ErrorType::Syntax,
-                message: "Expected an identifier after 'TYPE'".to_string(),
-                hint: Some("TYPE must be followed by a valid name".to_string()),
-                line: identifier_token.line,
-                column: identifier_token.column,
-                source: Some(self.source.clone()),
-            });
+        let identifier  = self.advance();
+        if identifier.token_type != TokenType::Identifier {
+            return Err(CPSError { error_type: ErrorType::Syntax,
+                message: "Expected an identifier after TYPE".to_string(), hint: Some("Make sure to write a type name after TYPE".to_string()),
+                line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
         }
 
-        let next_token = self.advance();
-        // if the next token is a '=', it's either a enumerated, pointer or set type declaration. 
-        // otherwise, it's a record type declaration
-
-        if next_token.token_type == TokenType::Equal {
-            // enumerated, pointer or set type declaration
-            
-            // if the next token is a '(', it's an enumerated type declaration
-            let next_token = self.advance();
-            match next_token.token_type {
-                TokenType::LParen => {
-                    // enumerated token type
-
-                    let mut enum_values: Vec<String> = Vec::new();
-                    while self.peek(0).token_type != TokenType::RParen {
-                        let enum_value_token = self.advance();
-                        if enum_value_token.token_type != TokenType::Identifier {
-                            return Err(CPSError {
-                                error_type: ErrorType::Syntax,
-                                message: "Expected an identifier in enumerated type declaration".to_string(),
-                                hint: Some("Enumerated type declarations must specify their values as identifiers enclosed in parentheses".to_string()),
-                                line: enum_value_token.line,
-                                column: enum_value_token.column,
-                                source: Some(self.source.clone()),
-                            });
-                        }
-
-                        enum_values.push(enum_value_token.lexeme);
-
-                        // check for comma after each value
-                        if self.peek(0).token_type == TokenType::Comma {
-                            self.advance(); // consume comma
-                        } else {
-                            break;
-                        }
-                    }
-
-                    return Ok(Ast::Stmt(Stmt::TypeDef {
-                        type_definition: TypeDefinition::Enumerated { name: identifier_token.lexeme, values: enum_values },
-                    }) );
-                }
-                TokenType::Caret => {
-                    // pointer type declaration
-
-                    let points_to = self.parse_type(TypeContext::PointerTarget)?;
-
-                    return Ok(Ast::Stmt(Stmt::TypeDef {
-                        type_definition: TypeDefinition::Pointer { name: identifier_token.lexeme, points_to: Box::new(points_to) },
-                    }) );
-                }
-                TokenType::Set => {
-                    // set type declaration
-
-                    let of_token = self.advance();
-                    if of_token.token_type != TokenType::Of {
-                        return Err(CPSError {
-                            error_type: ErrorType::Syntax,
-                            message: "Expected 'OF' after 'SET' in set type declaration".to_string(),
-                            hint: Some("SET type declaration must specify the base type using 'OF'".to_string()),
-                            line: of_token.line,
-                            column: of_token.column,
-                            source: Some(self.source.clone()),
-                        });
-                    }
-
-                    let base_type = self.parse_type(TypeContext::SetBase)?;
-
-                    return Ok(Ast::Stmt(Stmt::TypeDef {
-                        type_definition: TypeDefinition::Set { name: identifier_token.lexeme, base_type: Box::new(base_type) },
-                    }) );
-                }
-                _ => {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected '(', '^' or 'SET' after '=' in type declaration".to_string(),
-                        hint: Some("After the '=' in a type declaration, you must specify the type definition, which can be an enumerated type (starting with '('), a pointer type (starting with '^') or a set type (starting with 'SET')".to_string()),
-                        line: next_token.line,
-                        column: next_token.column,
-                        source: Some(self.source.clone()),
-                    });
-                }
-            }
-
-        } else {
-            // record type declaration
-            let mut fields: Vec<(String, Box<Type>)> = Vec::new();
-
-            while self.peek(0).token_type != TokenType::EndType {
-                // consume declare 
-                let declare_token = self.advance();
-                if declare_token.token_type != TokenType::Declare {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected 'DECLARE' in record type declaration".to_string(),
-                        hint: Some("Record type declarations must specify their fields using 'DECLARE'".to_string()),
-                        line: declare_token.line,
-                        column: declare_token.column,
-                        source: Some(self.source.clone()),
-                    });
-                }
-
-                let field_identifier_token = self.advance();
-                if field_identifier_token.token_type != TokenType::Identifier {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected an identifier for field name in record type declaration".to_string(),
-                        hint: Some("Each field in a record type declaration must have a valid name".to_string()),
-                        line: field_identifier_token.line,
-                        column: field_identifier_token.column,
-                        source: Some(self.source.clone()),
-                    });
-                }
-
-                let colon_token = self.advance();
-                if colon_token.token_type != TokenType::Colon {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected ':' after field name in record type declaration".to_string(),
-                        hint: Some("Each field declaration in a record type must have the format 'fieldName: fieldType'".to_string()),
-                        line: colon_token.line,
-                        column: colon_token.column,
-                        source: Some(self.source.clone()),
-                    });
-                }
-
-                let field_type_token = self.advance();
-                let field_type = match field_type_token.token_type {
-                    TokenType::Integer => Box::new(Type::Integer),
-                    TokenType::Real => Box::new(Type::Real),
-                    TokenType::String => Box::new(Type::String),
-                    TokenType::Char => Box::new(Type::Char),
-                    TokenType::Boolean => Box::new(Type::Boolean),
-                    TokenType::Array => Box::new(self.parse_array_type()?),
-                    _ => {
-                        return Err(CPSError {
-                            error_type: ErrorType::Syntax,
-                            message: "Expected a valid data type for field type in record type declaration".to_string(),
-                            hint: None,
-                            line: field_type_token.line,
-                            column: field_type_token.column,
-                            source: Some(self.source.clone()),
-                        });
-                    }
-                };
-
-                fields.push((field_identifier_token.lexeme, field_type) );
-            }
-
-            let end_type_token = self.advance();
-            if end_type_token.token_type != TokenType::EndType {
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Expected 'ENDTYPE' after record type declaration".to_string(),
-                    hint: Some("Record type declarations must be closed with 'ENDTYPE'".to_string()),
-                    line: end_type_token.line,
-                    column: end_type_token.column,
-                    source: Some(self.source.clone()),
-                });
-            }
-
-            return Ok(Ast::Stmt(Stmt::TypeDef {
-                type_definition: TypeDefinition::Record { name: identifier_token.lexeme, fields },
-             }) );
-
+        let equals = self.advance(); // TODO: Check if it is equals for all types except for record types, so if it is not equals it should be a record, remove future error
+        if equals.token_type != TokenType::Equal {
+            return Err(CPSError { error_type: ErrorType::Syntax, 
+                message: "Expected '=' after the identifier in a type declaration statement.".to_string(), hint: None, 
+                line: equals.line, column: equals.column, source: Some(self.source.clone()) });
         }
+
+        // match for '(' for sets 
+        let lparen = self.advance();
+        if lparen.token_type != TokenType::LParen { // temporary, remove later
+            return Err(CPSError { error_type: ErrorType::Syntax, 
+                message: "Expected '(' after the '=' in a type declaration statement.".to_string(), hint: None, 
+                line: lparen.line, column: lparen.column, source: Some(self.source.clone()) });
+        }
+
+        let mut enum_values: Vec<String> = Vec::new();
+
+        while self.peek(0).token_type != TokenType::RParen {
+            let iden = self.advance();
+            if iden.token_type != TokenType::Identifier {
+                return Err(CPSError { error_type: ErrorType::Syntax, 
+                    message: "Expected an enum value name in the type declaration".to_string(),
+                    hint: Some("Enum values are identifiers separated by commas.".to_string()),
+                    line: iden.line, column: iden.column, source: Some(self.source.clone()) });
+            }
+
+            enum_values.push(iden.lexeme);
+
+
+            if self.peek(0).token_type == TokenType::Comma {
+                self.advance(); // consume comma
+            } else {
+                break;
+            }
+        }
+
+        // consume the ')'
+        let close_paren = self.advance();
+        if close_paren.token_type != TokenType::RParen {
+            return Err(CPSError { error_type: ErrorType::Syntax,
+                message: "Expected ')' after the enum values.".to_string(),
+                hint: Some("Close the opening paranthesis '(' with a closing one ')'".to_string()),
+                line: close_paren.line, column: close_paren.column, source: Some(self.source.clone()) });
+        } 
+
+        // no need to check for whether there are actually any enum varients, an empty Enum should be ok
+
+        Ok(Ast::Stmt(Stmt::EnumDeclaration { identifier: identifier.lexeme, variants: enum_values }))
     }
+
 }
 
 
@@ -2001,7 +1886,7 @@ pub fn ast_to_expr(ast: Ast) -> Result<Expr, CPSError> {
             hint: Some("Make sure to provide a valid expression".to_string()),
             line: 0,
             column: 0,
-            source: None, // TOOD: <- fix this
+            source: None,
         }),
     }
 }

@@ -296,7 +296,7 @@ impl Interpreter {
                 Err(e) => Err(e),
             },
             Stmt::Constant { identifier, value } => self.evaluate_constant(identifier, value),
-            Stmt::TypeDef { type_definition } => todo!(),
+            Stmt::EnumDeclaration { identifier, variants } => self.evaluate_enum_declaration(identifier, variants),
             Stmt::At { .. } => unreachable!(),
         };
 
@@ -712,7 +712,7 @@ impl Interpreter {
                         // get the type of the identifier
                         
                         let type_ = self.current_env.borrow_mut().get_type(&iden)?;
-                        let value = Value::from_input(&input, &type_, &format!("variable '{}'", iden))?;
+                        let value = Value::from_input(&input, &type_, &format!("variable '{}'", iden), self.current_env.to_owned())?;
 
                         self.current_env.borrow_mut()
                             .set(iden, value)
@@ -819,7 +819,7 @@ impl Interpreter {
                 match type_ {
                     Type::Array(arr_type) => {
                         let target = format!("array element '{}[{}]'", name, index_int);
-                        let value = Value::from_input(&input, &arr_type.base_type, &target)?;
+                        let value = Value::from_input(&input, &arr_type.base_type, &target, self.current_env.to_owned())?;
 
                         self.current_env.borrow_mut()
                             .set_array_element(&name, index_int as usize, col_usize, value)
@@ -1212,7 +1212,7 @@ impl Interpreter {
         match target {
             Expr::Literal(Value::Identifier(iden)) => {
                 let type_ = self.current_env.borrow_mut().get_type(iden)?;
-                let value = Value::from_input(&line, &type_, &format!("variable '{}'", iden))?;
+                let value = Value::from_input(&line, &type_, &format!("variable '{}'", iden), self.current_env.to_owned())?;
 
                 self.current_env
                     .borrow_mut()
@@ -1267,7 +1267,7 @@ impl Interpreter {
                 };
 
                 let target_desc = format!("array element '{}[{}]'", name, index_int);
-                let value = Value::from_input(&line, &base_type, &target_desc)?;
+                let value = Value::from_input(&line, &base_type, &target_desc, self.current_env.to_owned())?;
 
                 self.current_env
                     .borrow_mut()
@@ -1366,15 +1366,47 @@ impl Interpreter {
         }
     }
 
+    /// Turns a type name written in the source into the type it was declared as.
+    fn resolve_type(&self, ty: &Type) -> Result<Type, CPSError> {
+        Ok(match ty {
+            Type::Named(name) => {
+                let env = self.current_env.borrow();
+                env.find_type_of_named_type(name)?
+            }
+            Type::Array(arr) => Type::Array(ArrayType {
+                base_type: Box::new(self.resolve_type(&arr.base_type)?),
+                ..arr.to_owned()
+            }),
+            other => other.to_owned(),
+        })
+    }
+
+    fn resolve_parameters(&self, parameters: &Vec<(String, Type, PassingValue)>) -> Result<Vec<(String, Type, PassingValue)>, CPSError> {
+        parameters
+            .iter()
+            .map(|(name, type_, passing_value)| Ok((name.to_owned(), self.resolve_type(type_)?, passing_value.to_owned())))
+            .collect()
+    }
+
     /// The value a variable of this type holds before anything is assigned to it.
     fn default_value(&mut self, ty: &Type) -> Result<Value, CPSError> {
-        Ok(match ty {
+        Ok(match ty { 
+            // TODO: Set all variable default types to be NONE, for them to only have Some after being assigned something
             Type::Integer => Value::Integer(0),
             Type::Real    => Value::Real(0.0),
             Type::String  => Value::String(String::new()),
             Type::Boolean => Value::Boolean(false),
             Type::Char    => Value::Char('\0'),
             Type::Date    => Value::Date(Date { day: 1, month: 1, year: 1900 }),
+            Type::Enum(type_name) => Value::Enum { type_name: type_name.to_owned(), variant: None },
+            Type::Named(name) => {
+                // find the actual type
+                let type_ = self.current_env.borrow()
+                    .find_type_of_named_type(name)?;
+
+                return self.default_value(&type_)
+            }
+            // Type::Enum(Name) => todo!(),
 
             Type::Array(arr) => {
                 let lower = self.evaluate_bound(&arr.lower_bound, "lower")?;
@@ -1491,6 +1523,14 @@ impl Interpreter {
         Ok(())
     }
 
+
+    fn evaluate_enum_declaration(&mut self, identifier: &String, variants: &Vec<String>) -> Result<(), CPSError> {
+        self.current_env.borrow_mut()
+            .define_enum(identifier, variants)?;
+
+        Ok(())
+    }
+
     fn evaluate_constant(&mut self, identifier: &String, value: &Value) -> Result<(), CPSError> {
         self.current_env
             .borrow_mut()
@@ -1516,7 +1556,7 @@ impl Interpreter {
         }
 
         let function_value = Value::Function(Function {
-            parameters: parameters.to_owned(),
+            parameters: self.resolve_parameters(parameters)?,
             body: body.to_owned(),
             return_type: None,
         });
@@ -1794,9 +1834,9 @@ impl Interpreter {
         }
 
         let function_value = Value::Function(Function {
-            parameters: parameters.to_owned(),
+            parameters: self.resolve_parameters(parameters)?,
             body: body.to_owned(),
-            return_type: Some(return_type),
+            return_type: Some(self.resolve_type(&return_type)?),
         });
 
         self.current_env
@@ -2227,6 +2267,7 @@ impl Interpreter {
             Value::Boolean(_) |
             Value::Array { .. } |
             Value::Date(_) |
+            Value::Enum { .. } |
             Value::Char(_) => {},
             Value::Identifier(iden) => {
                 match self.current_env 
@@ -2272,6 +2313,7 @@ fn check_if_type_can_be_converted(value: &Value, target_type: &Type) -> bool {
         (Value::Char(_), Type::Char) => true,
         (Value::Integer(_), Type::Real) => true,
         (Value::Date(_), Type::Date) => true,
+        (Value::Enum { type_name: l1, .. }, Type::Enum(r1)) => l1 == r1,
         (Value::Array { array, lower_bound: _, bounds_2d: _ }, Type::Array(arr_type)) => {
             match arr_type {
                 ArrayType { lower_bound: _, upper_bound: _, base_type , bounds_2d: _} => {
@@ -2306,6 +2348,7 @@ fn check_if_types_match_exactly(actual: &Type, expected: &Type) -> bool {
         (Type::Boolean, Type::Boolean) => true,
         (Type::Char,    Type::Char)    => true,
         (Type::Date,    Type::Date)    => true,
+        (Type::Enum(l1), Type::Enum(r1)) => l1 == r1,
         (Type::Array(a), Type::Array(b)) => {
             a.bounds_2d.is_some() == b.bounds_2d.is_some()
                 && check_if_types_match_exactly(&a.base_type, &b.base_type)
@@ -2413,6 +2456,8 @@ fn values_are_equal(left: &Value, right: &Value) -> Option<bool> {
         (Value::Boolean(l), Value::Boolean(r)) => Some(l == r),
         (Value::Char(l), Value::Char(r))       => Some(l == r),
         (Value::Date(l), Value::Date(r))       => Some(l == r),
+        (Value::Enum { type_name: l1, variant: l2 }, Value::Enum { type_name: r1, variant: r2 }) if l1 == r1 => Some(l2 == r2),
+        (Value::Array { array: l1, lower_bound: l2, bounds_2d: l3 }, Value::Array { array: r1, lower_bound: r2, bounds_2d: r3 }) => Some(l1 == r1 && l2 == r2 && l3 == r3),
         _ => None,
     }
 }

@@ -18,8 +18,9 @@ pub enum Type {
     Function,
     Array(ArrayType),
     Date,
+    Named(String),
     // Record(String), 
-    // Enum(String),
+    Enum(String),
 }
 
 impl std::fmt::Debug for Type {
@@ -31,6 +32,8 @@ impl std::fmt::Debug for Type {
             Type::Char => write!(f, "Char"),
             Type::Function => write!(f, "Function"),
             Type::Date => write!(f, "Date"),
+            Type::Enum(name) => write!(f, "{}", name),
+            Type::Named(name) => write!(f, "{}", name),
             Type::Array(array_type) => {
                 let lower = fmt_bound(&array_type.lower_bound);
                 let upper = fmt_bound(&array_type.upper_bound);
@@ -82,7 +85,7 @@ pub enum Value {
     Function(Function),
     Date(Date),
     // Record(HashMap<String, Value>),
-    // Enum { type_name: String, variant: String },
+    Enum { type_name: String, variant: Option<String> }, // may not contain a variant
     // Null,  
 }
 
@@ -96,6 +99,7 @@ impl Value {
             Value::Char(_)     => Type::Char,
             Value::Date(_)     => Type::Date,
             Value::Function(_) => Type::Function,
+            Value::Enum { type_name, .. } => Type::Enum(type_name.to_owned()),
 
             Value::Identifier(name) => {
                 return Err(CPSError {
@@ -231,6 +235,12 @@ impl std::fmt::Debug for Value {
             }
             Value::Char(c) => write!(f, "CHAR('{}')", c),
             Value::Date(date) => write!(f, "DATE({:02}/{:02}/{:04})", date.day, date.month, date.year),
+            Value::Enum { type_name, variant } => {
+                match variant {
+                    Some(v) => write!(f, "{}({})", type_name, v),
+                    None => write!(f, "{}(None)", type_name)
+                }
+            },
             Value::Array { array, lower_bound, bounds_2d } => {
                 let base = match array.first() {
                     Some(Value::Integer(_)) => "Integer",
@@ -306,6 +316,12 @@ impl std::fmt::Display for Value {
             Value::Boolean(true) => write!(f, "TRUE"),
             Value::Boolean(false) => write!(f, "FALSE"),
             Value::Date(date) => write!(f, "{:02}/{:02}/{:04}", date.day, date.month, date.year),
+            Value::Enum { variant, .. } => {
+                    match variant {
+                        Some(v) => write!(f, "{}", v),
+                        None => write!(f, "None"),
+                    }
+            },
             Value::Array { .. } | Value::Function(_) | Value::Identifier(_) => {
                 write!(f, "{:?}", self)
             }
@@ -337,13 +353,19 @@ impl Value {
                 hint: None,
                 line: 0, column: 0, source: None,
             }),
+            Value::Enum { type_name, variant: None } => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("Cannot {} a {} value before one has been assigned", context, type_name),
+                hint: Some(format!("Assign one of {}'s values first.", type_name)),
+                line: 0, column: 0, source: None,
+            }),
             other => Ok(other.to_string()),
         }
     }
 
     /// Turns a raw INPUT line into a value of the declared type.
     /// `target` names the destination for the error message, e.g. "variable 'Age'".
-    pub fn from_input(text: &str, ty: &Type, target: &str) -> Result<Value, CPSError> {
+    pub fn from_input(text: &str, ty: &Type, target: &str, environment: Rc<RefCell<Environment>>) -> Result<Value, CPSError> {
         match ty {
             Type::String => Ok(Value::String(text.to_string())),
 
@@ -379,6 +401,16 @@ impl Value {
                     line: 0, column: 0, source: None,
                 }),
             },
+
+            Type::Enum(name) => {
+                let is_valid_enum = environment.borrow().check_if_valid_enum_value(name, text);
+
+                if is_valid_enum {
+                    Ok(Value::Enum { type_name: name.into(), variant: Some(text.into()) })
+                } else {
+                    Err(input_error(format!("a valid variant of the enum {}", name).as_ref(), target, text))
+                }
+            }
 
             _ => Err(CPSError {
                 error_type: ErrorType::Runtime,
@@ -459,6 +491,8 @@ pub struct Environment {
     constants: HashSet<String>, // track constant variable names
     pub heap: Rc<RefCell<HashMap<usize, Value>>>, // for use in pointers and reference types in the future 
     next_address: Rc<RefCell<usize>>, // simple counter to assign unique addresses for reference types
+    types: HashMap<String, Type>, // defined custom types within the environment
+    enum_variants: HashMap<String, Vec<String>>, // the values of each enumerated type, in the order they were declared
 }
 
 impl Environment {
@@ -470,6 +504,8 @@ impl Environment {
             constants: HashSet::new(),
             heap: Rc::new(RefCell::new(HashMap::new())),
             next_address: Rc::new(RefCell::new(0)),
+            types: HashMap::new(),
+            enum_variants: HashMap::new(),
         }));
         
         // declare builtin functions here
@@ -498,6 +534,8 @@ impl Environment {
             constants: HashSet::new(),
             heap: Rc::clone(&parent.borrow().heap), // share heap with parent for reference types
             next_address: Rc::clone(&parent.borrow().next_address),
+            types: HashMap::new(),
+            enum_variants: HashMap::new(),
         }))
     }
 
@@ -1016,6 +1054,66 @@ impl Environment {
         }
     }
 
+    pub fn define_enum(&mut self, name: &str, variants: &[String]) -> Result<(), CPSError> {
+        if self.types.contains_key(name) {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("The type '{}' is already defined", name),
+                hint: None,
+                line: 0, column: 0, source: None,
+            })
+        }
+
+        // checked up front so a rejected declaration leaves nothing behind
+        for (i, variant) in variants.iter().enumerate() {
+            if variants[..i].contains(variant) {
+                return Err(CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("'{}' is listed twice in the type '{}'", variant, name),
+                    hint: Some("Every value of an enumerated type needs a name of its own.".to_owned()),
+                    line: 0, column: 0, source: None,
+                })
+            }
+        }
+
+        for variant in variants.iter() {
+            self.declare_constant(variant, &Value::Enum { type_name: name.to_owned(), variant: Some(variant.to_owned()) })?;
+        }
+
+        self.types.insert(name.to_owned(), Type::Enum(name.to_owned()));
+        self.enum_variants.insert(name.to_owned(), variants.to_vec());
+
+        Ok(())
+    }
+
+
+    pub fn check_if_valid_enum_value(&self, name: &str, variant: &str) -> bool {
+        if let Some(variants) = self.enum_variants.get(name) {
+            return variants.iter().any(|v| v == variant);
+        }
+
+        match &self.parent {
+            Some(parent_rc) => parent_rc.borrow().check_if_valid_enum_value(name, variant),
+            None => false,
+        }
+    }
+
+    pub fn find_type_of_named_type(&self, name: &String) -> Result<Type, CPSError> {
+        if let Some(type_) = self.types.get(name) {
+            return Ok(type_.to_owned());
+        }
+
+        match &self.parent {
+            Some(parent_rc) => parent_rc.borrow().find_type_of_named_type(name),
+            None => Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("The type '{}' has not been defined", name),
+                hint: Some("Make sure you define types before you use them".to_owned()),
+                line: 0, column: 0, source: None,
+            }),
+        }
+    }
+
 
 
     pub fn define(&mut self, name: String, value: Value) -> Result<(), CPSError> {
@@ -1028,7 +1126,6 @@ impl Environment {
             });
         }
 
-        // check if it's an array 
         let current_addr = *self.next_address.borrow();
         self.heap.borrow_mut().insert(current_addr, value.clone());
         self.bindings.insert(name, current_addr);
