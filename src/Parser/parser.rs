@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::Inter::cps::{ArrayType, Date, Type, Value};
 use crate::Lexer::{lexer::Token, lexer::TokenType};
 use crate::errortype::{CPSError, ErrorType};
@@ -1243,6 +1243,8 @@ impl Parser {
         let mut parameters: Vec<(String, Type, PassingValue)> = Vec::new();
         let mut passing_value = PassingValue::ByVal;
 
+        let mut param_names: HashSet<String> = HashSet::new();
+
         while self.peek(0).token_type != TokenType::RParen {
             // go through the identifier : type pairs
             let mut param_identifier = self.advance();
@@ -1285,13 +1287,25 @@ impl Parser {
                     source: Some(self.source.clone()),
                 });
             } 
+
+            if !param_names.insert(param_identifier.lexeme.to_lowercase()) { // check if a parameter is repeated
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("You cannot have 2 parameters with the same name: '{}' in a procedure.", param_identifier.lexeme),
+                    hint: Some("Note that the Cambridge Pseudocode is not case sensitive, so two of the same parameters with different cases are considered the same one.".to_lowercase()),
+                    line: param_identifier.line,
+                    column: param_identifier.column,
+                    source: Some(self.source.clone()),
+                })
+            }
+
+
             // commented to align closer to spec (everything after a byval/byref is a byval/byref)
             // else {  
             //     // default type of variable is by value (make a copy of variable rather than reference)
             //     passing_value = PassingValue::ByVal; // could be condensed by removing first if and shifting into 
             //                                          // keeping it like this for simplicity/ease of reading
             // }
-
             let colon_token = self.advance();
             if colon_token.token_type != TokenType::Colon {
                 return Err(CPSError {
@@ -1305,7 +1319,8 @@ impl Parser {
             }
 
             let param_type = self.parse_type(TypeContext::Parameter)?;
-            parameters.push((param_identifier.lexeme, param_type, passing_value));
+
+            parameters.push((param_identifier.lexeme.clone(), param_type, passing_value));
 
             // check for comma after
             if self.peek(0).token_type == TokenType::Comma {
@@ -1392,6 +1407,7 @@ impl Parser {
         }
 
         let mut parameters: Vec<(String, Type, PassingValue)> = Vec::new();
+        let mut param_names: HashSet<String> = HashSet::new();
 
         let passing_value = PassingValue::ByVal;
         while self.peek(0).token_type != TokenType::RParen {
@@ -1439,6 +1455,21 @@ impl Parser {
             //     passing_value = PassingValue::ByVal; // could be condensed by removing first if and shifting into 
             //                                          // keeping it like this for simplicity/ease of reading
             // }
+
+            
+            if !param_names.insert(param_identifier.lexeme.to_lowercase()) { // check if a parameter is repeated
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("You cannot have 2 parameters with the same name: '{}' in a function.", param_identifier.lexeme),
+                    hint: Some("Note that the Cambridge Pseudocode is not case sensitive, so two of the same parameters with different cases are considered the same one.".to_lowercase()),
+                    line: param_identifier.line,
+                    column: param_identifier.column,
+                    source: Some(self.source.clone()),
+                })
+            }
+
+
+
 
 
             let colon_token = self.advance();

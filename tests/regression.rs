@@ -123,6 +123,19 @@ macro_rules! case {
     };
 }
 
+// /// A bug that has been found but not fixed. These state the behaviour that is wanted, so each one
+// /// is red now and turns green on the day the bug is fixed; rename it to `case!` when that happens.
+// /// They run by default and are meant to stay visible. To ask the narrower question "have I broken
+// /// anything that used to work", skip them: `cargo test --test regression -- --skip known_bug`.
+// macro_rules! known_bug {
+//     ($id:ident, $name:expr, $source:expr, $expected:expr, $input:expr, $error:expr, $files:expr) => {
+//         #[test]
+//         fn $id() {
+//             run_case($name, $source, $expected, $input, $error, $files);
+//         }
+//     };
+// }
+
 case!(
     case_001_arithmetic_2_3_4,
     "arithmetic 2 + 3 * 4",
@@ -1978,7 +1991,7 @@ case!(
     "reject enum input spelling",
     "TYPE Season = (Spring, Summer, Autumn, Winter)\nDECLARE S : Season\nINPUT S\n",
     "",
-    "summer\n",
+    "Sumer\n",
     Some("variant"),
     &[]
 );
@@ -2950,5 +2963,596 @@ case!(
     "",
     "",
     Some("must evaluate to a string"),
+    &[]
+);
+
+case!(
+    spec_identifier_letters_digits_underscore,
+    "identifier with digits and underscore",
+    "DECLARE Total_2 : INTEGER\nTotal_2 <- 5\nOUTPUT Total_2\n",
+    "5\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_reject_identifier_starting_with_digit,
+    "reject identifier starting with a digit",
+    "DECLARE 2Bad : INTEGER\n",
+    "",
+    "",
+    Some("lexical"),
+    &[]
+);
+
+case!(
+    spec_reject_keyword_as_identifier,
+    "reject a keyword used as an identifier",
+    "DECLARE WHILE : INTEGER\n",
+    "",
+    "",
+    Some("identifier"),
+    &[]
+);
+
+case!(
+    spec_concat_binds_looser_than_addition,
+    "& binds looser than +",
+    "OUTPUT \"n=\" & 1 + 2\n",
+    "n=3\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_concat_binds_tighter_than_comparison,
+    "& binds tighter than =",
+    "OUTPUT \"a\" & \"b\" = \"ab\"\n",
+    "TRUE\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_div_mod_identity_positive,
+    "DIV and MOD reconstruct the dividend",
+    "OUTPUT (7 DIV 2) * 2 + (7 MOD 2)\n",
+    "7\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_exact_division_assignable_to_integer,
+    "exact division assigns to INTEGER",
+    "DECLARE X : INTEGER\nX <- 4 / 2\nOUTPUT X\n",
+    "2\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_for_bounds_evaluated_once,
+    "FOR bounds are evaluated once",
+    "DECLARE n : INTEGER\nDECLARE i : INTEGER\nn <- 3\nFOR i <- 1 TO n\nn <- 10\nOUTPUT i\nNEXT i\n",
+    "1\n2\n3\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_for_step_overshoot_terminates,
+    "FOR STEP terminates on overshoot",
+    "DECLARE i : INTEGER\nFOR i <- 1 TO 10 STEP 4\nOUTPUT i\nNEXT i\n",
+    "1\n5\n9\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_for_negative_step,
+    "FOR with a negative STEP counts down",
+    "DECLARE i : INTEGER\nFOR i <- 5 TO 1 STEP -1\nOUTPUT i\nNEXT i\n",
+    "5\n4\n3\n2\n1\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_for_equal_bounds_runs_once,
+    "FOR runs once when value1 = value2",
+    "DECLARE i : INTEGER\nFOR i <- 4 TO 4\nOUTPUT i\nNEXT i\nOUTPUT \"done\"\n",
+    "4\ndone\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_for_counter_write_does_not_derail,
+    "writing the FOR counter does not derail the loop",
+    "DECLARE i : INTEGER\nFOR i <- 1 TO 3\nOUTPUT i\ni <- 99\nNEXT i\n",
+    "1\n2\n3\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_for_expression_bounds,
+    "FOR bounds may be expressions",
+    "DECLARE i : INTEGER\nFOR i <- 1 + 1 TO 2 * 3\nOUTPUT i\nNEXT i\n",
+    "2\n3\n4\n5\n6\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_while_false_runs_zero_times,
+    "WHILE runs zero times when false first",
+    "DECLARE X : INTEGER\nX <- 0\nWHILE X > 5\nOUTPUT \"no\"\nENDWHILE\nOUTPUT \"done\"\n",
+    "done\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_repeat_runs_at_least_once,
+    "REPEAT runs once even when already true",
+    "DECLARE X : INTEGER\nX <- 99\nREPEAT\nOUTPUT \"once\"\nUNTIL X > 5\n",
+    "once\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_case_first_match_wins,
+    "CASE takes the first matching clause",
+    "DECLARE X : INTEGER\nX <- 5\nCASE OF X\n1 TO 9 : OUTPUT \"first\"\n5 : OUTPUT \"second\"\nENDCASE\n",
+    "first\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_reject_byref_in_function,
+    "reject BYREF on a function parameter",
+    "FUNCTION F(BYREF X : INTEGER) RETURNS INTEGER\nRETURN X\nENDFUNCTION\nDECLARE A : INTEGER\nOUTPUT F(A)\n",
+    "",
+    "",
+    Some("reference"),
+    &[]
+);
+
+case!(
+    spec_byref_applies_to_following_parameters,
+    "BYREF carries to later parameters",
+    "PROCEDURE SWAP(BYREF X : INTEGER, Y : INTEGER)\nDECLARE T : INTEGER\nT <- X\nX <- Y\nY <- T\nENDPROCEDURE\nDECLARE A : INTEGER\nDECLARE B : INTEGER\nA <- 1\nB <- 2\nCALL SWAP(A, B)\nOUTPUT A, \" \", B\n",
+    "2 1\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_global_readable_in_procedure,
+    "a procedure reads a global",
+    "DECLARE G : INTEGER\nG <- 7\nPROCEDURE P()\nOUTPUT G\nENDPROCEDURE\nCALL P()\n",
+    "7\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_global_writable_in_procedure,
+    "a procedure writes a global",
+    "DECLARE G : INTEGER\nG <- 1\nPROCEDURE P()\nG <- 2\nENDPROCEDURE\nCALL P()\nOUTPUT G\n",
+    "2\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_local_does_not_leak_from_procedure,
+    "a procedure local does not leak out",
+    "PROCEDURE P()\nDECLARE L : INTEGER\nL <- 1\nENDPROCEDURE\nCALL P()\nOUTPUT L\n",
+    "",
+    "",
+    Some("undefined"),
+    &[]
+);
+
+case!(
+    spec_output_mixed_operand_types,
+    "OUTPUT joins operands of mixed types",
+    "DECLARE N : INTEGER\nN <- 3\nOUTPUT \"a\", N, TRUE, 1.5, 'x'\n",
+    "a3TRUE1.5x\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_empty_string_and_length,
+    "the empty string has length zero",
+    "DECLARE S : STRING\nS <- \"\"\nOUTPUT \"[\", S, \"] len=\", LENGTH(S)\n",
+    "[] len=0\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_guide_string_function_examples,
+    "the guide's own string function examples",
+    "OUTPUT RIGHT(\"ABCDEFGH\", 3)\nOUTPUT LENGTH(\"Happy Days\")\nOUTPUT MID(\"ABCDEFGH\", 2, 3)\nOUTPUT \"Summer\" & \" \" & \"Pudding\"\n",
+    "FGH\n10\nBCD\nSummer Pudding\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_append_creates_missing_file,
+    "APPEND creates a file that does not exist",
+    "DECLARE L : STRING\nOPENFILE \"d.txt\" FOR APPEND\nWRITEFILE \"d.txt\", \"x\"\nCLOSEFILE \"d.txt\"\nOPENFILE \"d.txt\" FOR READ\nREADFILE \"d.txt\", L\nCLOSEFILE \"d.txt\"\nOUTPUT L\n",
+    "x\n",
+    "",
+    None,
+    &[("d.txt", "x\n")]
+);
+
+case!(
+    spec_reject_opening_an_open_file,
+    "reject opening a file that is already open",
+    "OPENFILE \"d.txt\" FOR WRITE\nOPENFILE \"d.txt\" FOR READ\n",
+    "",
+    "",
+    Some("already open"),
+    &[]
+);
+
+case!(
+    spec_reject_closing_unopened_file,
+    "reject closing a file that is not open",
+    "CLOSEFILE \"d.txt\"\n",
+    "",
+    "",
+    Some("not open"),
+    &[]
+);
+
+case!(
+    spec_reject_eof_on_write_mode_file,
+    "reject EOF on a file opened for WRITE",
+    "OPENFILE \"d.txt\" FOR WRITE\nOUTPUT EOF(\"d.txt\")\n",
+    "",
+    "",
+    Some("read mode"),
+    &[]
+);
+
+case!(
+    spec_variable_name_is_case_insensitive,
+    "a variable is reached in any case",
+    "DECLARE Num1 : INTEGER\nNum1 <- 2\nOUTPUT num1\n",
+    "2\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_array_name_is_case_insensitive,
+    "an array is reached in any case",
+    "DECLARE Arr : ARRAY[1:2] OF INTEGER\nARR[1] <- 9\nOUTPUT arr[1]\n",
+    "9\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_constant_name_is_case_insensitive,
+    "a constant is reached in any case",
+    "CONSTANT Max = 5\nOUTPUT mAx\n",
+    "5\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_procedure_name_is_case_insensitive,
+    "a procedure is called in any case",
+    "PROCEDURE Foo()\nOUTPUT \"hi\"\nENDPROCEDURE\nCALL foo()\n",
+    "hi\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_function_name_is_case_insensitive,
+    "a function is called in any case",
+    "FUNCTION Bar() RETURNS INTEGER\nRETURN 7\nENDFUNCTION\nOUTPUT bAr()\n",
+    "7\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_type_name_is_case_insensitive,
+    "a type name is used in any case",
+    "TYPE Season = (Spring, Summer)\nDECLARE S : season\nS <- SPRING\nOUTPUT S\n",
+    "Spring\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_for_counter_is_case_insensitive,
+    "a FOR counter is the same variable in any case",
+    "DECLARE i : INTEGER\nFOR I <- 1 TO 2\nOUTPUT i\nNEXT I\n",
+    "1\n2\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_byref_argument_is_case_insensitive,
+    "a BYREF argument is matched in any case",
+    "PROCEDURE P(BYREF X : INTEGER)\nX <- 9\nENDPROCEDURE\nDECLARE A : INTEGER\nCALL P(a)\nOUTPUT A\n",
+    "9\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_enum_input_is_case_insensitive,
+    "enum input is case insensitive and stored as declared",
+    "TYPE Season = (Spring, Summer)\nDECLARE S : Season\nINPUT S\nOUTPUT S\nOUTPUT S = Summer\n",
+    "Summer\nTRUE\n",
+    "summer\n",
+    None,
+    &[]
+);
+
+case!(
+    spec_enum_input_uppercase_stored_as_declared,
+    "enum input in upper case is stored as declared",
+    "TYPE Season = (Spring, Summer)\nDECLARE S : Season\nINPUT S\nOUTPUT S\n",
+    "Summer\n",
+    "SUMMER\n",
+    None,
+    &[]
+);
+
+case!(
+    spec_reject_enum_variants_differing_only_by_case,
+    "reject enum variants differing only by case",
+    "TYPE E = (Red, RED)\n",
+    "",
+    "",
+    Some("twice"),
+    &[]
+);
+
+case!(
+    spec_reject_constant_mutation_in_another_case,
+    "reject writing a constant spelled in another case",
+    "CONSTANT Max = 5\nmax <- 6\n",
+    "",
+    "",
+    Some("constant"),
+    &[]
+);
+
+case!(
+    spec_filenames_remain_case_sensitive,
+    "file names are strings, not identifiers",
+    "OPENFILE \"Data.txt\" FOR WRITE\nCLOSEFILE \"data.txt\"\n",
+    "",
+    "",
+    Some("not open"),
+    &[]
+);
+
+case!(
+    spec_for_counter_is_scoped_to_the_loop,
+    "a counter the loop declared can be declared after it",
+    "FOR idx <- 1 TO 10\nNEXT idx\n\nDECLARE Idx : INTEGER\nIdx <- 5\nOUTPUT Idx\n",
+    "5\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_reject_reading_implicit_counter_after_loop,
+    "a counter the loop declared does not outlive it",
+    "FOR idx <- 1 TO 3\nNEXT idx\nOUTPUT idx\n",
+    "",
+    "",
+    Some("undefined"),
+    &[]
+);
+
+case!(
+    spec_declared_counter_survives_the_loop,
+    "a counter declared before the loop outlives it",
+    "DECLARE Idx : INTEGER\nFOR Idx <- 1 TO 3\nNEXT Idx\nOUTPUT Idx\n",
+    "3\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_two_implicit_loops_share_a_counter_name,
+    "two loops may each declare the same counter",
+    "FOR i <- 1 TO 2\nOUTPUT i\nNEXT i\nFOR i <- 5 TO 6\nOUTPUT i\nNEXT i\n",
+    "1\n2\n5\n6\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_implicit_counter_shadows_a_global,
+    "a loop counter shadows a global and leaves it alone",
+    "DECLARE i : INTEGER\ni <- 100\nPROCEDURE P()\nFOR i <- 1 TO 3\nNEXT i\nENDPROCEDURE\nCALL P()\nOUTPUT i\n",
+    "100\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_reject_duplicate_declaration,
+    "reject two declarations of one name",
+    "DECLARE Total : INTEGER\nDECLARE total : STRING\n",
+    "",
+    "",
+    Some("already been declared"),
+    &[]
+);
+
+case!(
+    spec_reject_duplicate_parameter_names,
+    "reject two parameters sharing a name",
+    "PROCEDURE P(Value : INTEGER, VALUE : STRING)\nENDPROCEDURE\nCALL P(1, \"a\")\n",
+    "",
+    "",
+    Some("error"),
+    &[]
+);
+
+case!(
+    spec_reject_declaration_colliding_with_constant,
+    "reject a declaration colliding with a constant",
+    "CONSTANT Max = 5\nDECLARE MAX : INTEGER\n",
+    "",
+    "",
+    Some("constant"),
+    &[]
+);
+
+case!(
+    spec_shadowing_a_global_remains_allowed,
+    "a local may shadow a global of the same name",
+    "DECLARE X : INTEGER\nX <- 1\nPROCEDURE P()\nDECLARE X : STRING\nX <- \"in\"\nOUTPUT X\nENDPROCEDURE\nCALL P()\nOUTPUT X\n",
+    "in\n1\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_div_truncates_negative_quotient,
+    "DIV truncates toward zero, -7 DIV 2 is -3",
+    "DECLARE A : INTEGER\nA <- 0 - 7\nOUTPUT A DIV 2\n",
+    "-3\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_div_truncates_negative_quotient_wider,
+    "DIV truncates toward zero, -9 DIV 4 is -2",
+    "DECLARE A : INTEGER\nA <- 0 - 9\nOUTPUT A DIV 4\n",
+    "-2\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_div_mod_identity_holds_for_negatives,
+    "(A DIV B) * B + (A MOD B) reconstructs A",
+    "DECLARE A : INTEGER\nA <- 0 - 7\nOUTPUT (A DIV 2) * 2 + (A MOD 2)\n",
+    "-7\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_integer_multiply_overflow_is_reported,
+    "multiplication past INTEGER range is an error",
+    "DECLARE A : INTEGER\nDECLARE B : INTEGER\nA <- 4000000000\nB <- 4000000000\nOUTPUT A * B\n",
+    "",
+    "",
+    Some("overflow"),
+    &[]
+);
+
+case!(
+    spec_integer_add_overflow_is_reported,
+    "addition past INTEGER range is an error",
+    "DECLARE A : INTEGER\nDECLARE B : INTEGER\nA <- 9000000000000000000\nB <- 9000000000000000000\nOUTPUT A + B\n",
+    "",
+    "",
+    Some("overflow"),
+    &[]
+);
+
+case!(
+    negative_integer_exponent_does_not_crash,
+    "a negative INTEGER exponent is handled, not a panic",
+    "DECLARE A : INTEGER\nDECLARE B : INTEGER\nA <- 2\nB <- 0 - 1\nOUTPUT A ^ B\n",
+    "",
+    "",
+    Some("error"),
+    &[]
+);
+
+// ignore these two cases, this is a feature in the lagnauge, not a bug.
+// known_bug!(
+//     known_bug_reject_builtin_redefinition_lowercase,
+//     "a builtin cannot be redefined in another case",
+//     "FUNCTION length(S : STRING) RETURNS INTEGER\nRETURN 99\nENDFUNCTION\n",
+//     "",
+//     "",
+//     Some("builtin"),
+//     &[]
+// );
+//
+// known_bug!(
+//     known_bug_reject_builtin_redefinition_mixed_case,
+//     "a builtin cannot be shadowed by a procedure in another case",
+//     "PROCEDURE Length()\nENDPROCEDURE\n",
+//     "",
+//     "",
+//     Some("builtin"),
+//     &[]
+// );
+
+case!(
+    duplicate_parameters_rejected_at_definition,
+    "two parameters sharing a name are rejected at the definition",
+    "PROCEDURE P(Value : INTEGER, VALUE : STRING)\nENDPROCEDURE\nOUTPUT \"defined\"\n",
+    "",
+    "",
+    Some("error"),
     &[]
 );

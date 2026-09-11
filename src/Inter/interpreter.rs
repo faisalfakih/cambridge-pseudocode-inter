@@ -714,12 +714,7 @@ impl Interpreter {
             }
         }
 
-        // first declare the loop variable
-        self.current_env
-            .borrow_mut()
-            .define(identifier.to_owned(), Value::Integer(start_int.to_owned()))?;
-
-        // if step int is 0, panic
+        // checked before the counter exists, so a rejected loop leaves no variable behind
         if step_int == 0 {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
@@ -731,6 +726,33 @@ impl Interpreter {
             });
         }
 
+        // a loop that declares its own counter owns it, and takes it away again at the end
+        let counter_existed = self.current_env.borrow().is_declared_here(identifier);
+        let start = Value::Integer(start_int.to_owned());
+
+        if counter_existed {
+            self.current_env.borrow_mut().set(identifier, start)?;
+        } else {
+            self.current_env.borrow_mut().define(identifier, start)?;
+        }
+
+        let result = self.run_for_body(identifier, start_int, end_int, step_int, body);
+
+        if !counter_existed {
+            self.current_env.borrow_mut().undeclare(identifier);
+        }
+
+        result
+    }
+
+    fn run_for_body(
+        &mut self,
+        identifier: &str,
+        start_int: i64,
+        end_int: i64,
+        step_int: i64,
+        body: &BlockStmt,
+    ) -> Result<(), CPSError> {
         let mut i = start_int;
         while (step_int > 0 && i <= end_int) || (step_int < 0 && i >= end_int) {
             self.current_env
@@ -1877,7 +1899,7 @@ impl Interpreter {
 
         self.current_env
             .borrow_mut()
-            .define(identifier.to_owned(), inital_value)?;
+            .define(identifier, inital_value)?;
         Ok(())
     }
 
@@ -1909,6 +1931,7 @@ impl Interpreter {
         // self.evaluate_declaration_stmt(identifier, &Type::Function)?;
 
         // first check if procedure is a builtin
+        // Keep builtins to be case sensitive
         if BUILTIN_FUNCTIONS.contains(&identifier) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
@@ -1931,7 +1954,7 @@ impl Interpreter {
 
         self.current_env
             .borrow_mut()
-            .define(identifier.to_owned(), function_value)?;
+            .define(identifier, function_value)?;
 
         // self.evaluate_assignment_stmt(
         //     identifier,
@@ -2118,9 +2141,7 @@ impl Interpreter {
 
                     let converted =
                         convert_values_to_base_type(&arg_value, param_type).unwrap_or(arg_value);
-                    new_env
-                        .borrow_mut()
-                        .define(param_name.to_owned(), converted)?;
+                    new_env.borrow_mut().define(param_name, converted)?;
                 }
                 PassingValue::ByRef => {
                     let current_arg = &arguments[i];
@@ -2145,7 +2166,7 @@ impl Interpreter {
                             let address = match self
                                 .current_env
                                 .borrow_mut()
-                                .find_address_of_variable(caller_variable_name.to_owned())
+                                .find_address_of_variable(caller_variable_name)
                             {
                                 Some(a) => a,
                                 None => {
@@ -2198,7 +2219,7 @@ impl Interpreter {
 
                             new_env
                                 .borrow_mut()
-                                .set_variable_at_address(param_name.clone(), address)?;
+                                .set_variable_at_address(&param_name, address)?;
                         }
                         _ => {
                             return Err(CPSError {
@@ -2314,7 +2335,7 @@ impl Interpreter {
 
         self.current_env
             .borrow_mut()
-            .define(identifier.to_owned(), function_value.clone())?;
+            .define(identifier, function_value.clone())?;
 
         Ok(())
     }
@@ -2495,7 +2516,10 @@ impl Interpreter {
 
     fn add(&self, left: Value, right: Value) -> Result<Value, CPSError> {
         match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l + r)),
+            (Value::Integer(l), Value::Integer(r)) => l
+                .checked_add(r)
+                .map(Value::Integer)
+                .ok_or_else(|| overflow_error(l, "+", r)),
             (Value::Real(l), Value::Real(r)) => Ok(Value::Real(l + r)),
             (Value::Integer(l), Value::Real(r)) => Ok(Value::Real(l as f64 + r)),
             (Value::Real(l), Value::Integer(r)) => Ok(Value::Real(l + r as f64)),
@@ -2512,7 +2536,10 @@ impl Interpreter {
 
     fn subtract(&self, left: Value, right: Value) -> Result<Value, CPSError> {
         match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l - r)),
+            (Value::Integer(l), Value::Integer(r)) => l
+                .checked_sub(r)
+                .map(Value::Integer)
+                .ok_or_else(|| overflow_error(l, "-", r)),
             (Value::Real(l), Value::Real(r)) => Ok(Value::Real(l - r)),
             (Value::Integer(l), Value::Real(r)) => Ok(Value::Real(l as f64 - r)),
             (Value::Real(l), Value::Integer(r)) => Ok(Value::Real(l - r as f64)),
@@ -2532,7 +2559,10 @@ impl Interpreter {
 
     fn multiply(&self, left: Value, right: Value) -> Result<Value, CPSError> {
         match (left.clone(), right.clone()) {
-            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l * r)),
+            (Value::Integer(l), Value::Integer(r)) => l
+                .checked_mul(r)
+                .map(Value::Integer)
+                .ok_or_else(|| overflow_error(l, "*", r)),
             (Value::Real(l), Value::Real(r)) => Ok(Value::Real(l * r)),
             (Value::Integer(l), Value::Real(r)) => Ok(Value::Real(l as f64 * r)),
             (Value::Real(l), Value::Integer(r)) => Ok(Value::Real(l * r as f64)),
@@ -2610,7 +2640,7 @@ impl Interpreter {
                         source: None,
                     });
                 }
-                Ok(Value::Real((a / b).floor()))
+                Ok(Value::Real((a / b).trunc()))
             }
             _ => Err(CPSError {
                 error_type: ErrorType::Runtime,
@@ -2667,7 +2697,22 @@ impl Interpreter {
 
     fn power(&self, left: Value, right: Value) -> Result<Value, CPSError> {
         match (left.clone(), right.clone()) {
-            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.pow(b as u32))),
+            (Value::Integer(a), Value::Integer(b)) => {
+                if b < 0 {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: format!("Cannot raise integer {a} to negative exponent {b}"),
+                        hint: Some(
+                            "Use REAL values if a fractional result is expected".to_string(),
+                        ),
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    });
+                }
+
+                Ok(Value::Integer(a.pow(b as u32)))
+            }
             (Value::Real(a), Value::Real(b)) => Ok(Value::Real(a.powf(b))),
             (Value::Integer(a), Value::Real(b)) => Ok(Value::Real((a as f64).powf(b))),
             (Value::Real(a), Value::Integer(b)) => Ok(Value::Real(a.powf(b as f64))),
@@ -2911,6 +2956,20 @@ fn convert_values_to_base_type(value: &Value, target_type: &Type) -> Result<Valu
             Ok(Value::Integer(*r as i64))
         }
         _ => Ok(value.clone()),
+    }
+}
+
+fn overflow_error(left: i64, operation: &str, right: i64) -> CPSError {
+    CPSError {
+        error_type: ErrorType::Runtime,
+        message: format!(
+            "Integer overflow: {} {} {} is outside the range an INTEGER can hold",
+            left, operation, right
+        ),
+        hint: Some("An INTEGER in the interpreter is stored with 64 bits and therefore runs from -9223372036854775808 to 9223372036854775807.".to_string()),
+        line: 0,
+        column: 0,
+        source: None,
     }
 }
 
