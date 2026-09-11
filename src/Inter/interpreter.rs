@@ -2711,7 +2711,18 @@ impl Interpreter {
                     });
                 }
 
-                Ok(Value::Integer(a.pow(b as u32)))
+                let exponent = u32::try_from(b).map_err(|_| CPSError {
+                    error_type: ErrorType::Runtime,
+                    message: format!("Integer exponent {b} is too large"),
+                    hint: None,
+                    line: 0,
+                    column: 0,
+                    source: None,
+                })?;
+
+                a.checked_pow(exponent)
+                    .map(Value::Integer)
+                    .ok_or_else(|| overflow_error(a, "^", b))
             }
             (Value::Real(a), Value::Real(b)) => Ok(Value::Real(a.powf(b))),
             (Value::Integer(a), Value::Real(b)) => Ok(Value::Real((a as f64).powf(b))),
