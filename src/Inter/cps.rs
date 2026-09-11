@@ -21,6 +21,56 @@ pub enum Type {
     Enum(String),
 }
 
+// make identifiers case sensitive
+trait InsertLowerMap<V, K: AsRef<str>> {
+    fn insert_lower(&mut self, key: K, value: V);
+    fn get_lower(&self, key: K) -> Option<&V>;
+    fn contains_lower_key(&self, key: K) -> bool;
+    fn remove_lower(&mut self, key: K) -> Option<V>;
+}
+
+impl<V, K: AsRef<str>> InsertLowerMap<V, K> for HashMap<String, V> {
+    fn insert_lower(&mut self, key: K, value: V) {
+        self.insert(key.as_ref().to_lowercase(), value);
+    }
+    fn get_lower(&self, key: K) -> Option<&V> {
+        self.get(&key.as_ref().to_lowercase())
+    }
+    fn contains_lower_key(&self, key: K) -> bool {
+        self.contains_key(&key.as_ref().to_lowercase())
+    }
+    fn remove_lower(&mut self, key: K) -> Option<V> {
+        self.remove(&key.as_ref().to_lowercase())
+    }
+}
+
+trait InsertLowerSet {
+    fn insert_lower(&mut self, value: &str);
+    fn contains_lower(&self, value: &str) -> bool;
+}
+
+impl InsertLowerSet for HashSet<String> {
+    fn insert_lower(&mut self, value: &str) {
+        self.insert(value.to_lowercase());
+    }
+    fn contains_lower(&self, value: &str) -> bool {
+        self.contains(&value.to_lowercase())
+    }
+}
+
+// impl<T, Y, U> InsertLower<T, Y, U> for HashMap<Y, U>
+// where
+//     T: Hash,
+//     Y: Into<String>,
+// {
+//     fn insert_lower(&mut self, key: &Y, value: &U) -> Result<(), CPSError> {
+//         let key_str: &str = (*key).into();
+//         let key_lower = key_str.to_lowercase();
+//         self.insert(&key_lower, value);
+//         return Ok(());
+//     }
+// }
+
 impl std::fmt::Debug for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -455,19 +505,18 @@ impl Value {
             },
 
             Type::Enum(name) => {
-                let is_valid_enum = environment.borrow().check_if_valid_enum_value(name, text);
+                let declared = environment.borrow().find_enum_variant(name, text);
 
-                if is_valid_enum {
-                    Ok(Value::Enum {
+                match declared {
+                    Some(declared) => Ok(Value::Enum {
                         type_name: name.into(),
-                        variant: Some(text.into()),
-                    })
-                } else {
-                    Err(input_error(
+                        variant: Some(declared),
+                    }),
+                    None => Err(input_error(
                         format!("a valid variant of the enum {}", name).as_ref(),
                         target,
                         text,
-                    ))
+                    )),
                 }
             }
 
@@ -701,7 +750,7 @@ impl Environment {
     }
 
     pub fn get(&self, name: &str) -> Option<Value> {
-        if let Some(address) = self.bindings.get(name) {
+        if let Some(address) = self.bindings.get_lower(name) {
             return Some(self.get_variable_at_address(*address)?);
         }
 
@@ -723,9 +772,12 @@ impl Environment {
             });
         }
 
-        if self.bindings.contains_key(name) {
+        if self.bindings.contains_lower_key(name) {
             // variable exists in current scope, update it
-            let address = self.bindings[name];
+            let address = match self.bindings.get_lower(name) {
+                Some(add) => *add,
+                None => unreachable!("cant reach here!"),
+            };
             self.heap.borrow_mut().insert(address, value);
 
             return Ok(());
@@ -751,7 +803,7 @@ impl Environment {
         col: Option<usize>,
         value: Value,
     ) -> Result<(), CPSError> {
-        if let Some(address) = self.bindings.get(name) {
+        if let Some(address) = self.bindings.get_lower(name) {
             if let Some(current_value) = self.heap.borrow_mut().get_mut(address) {
                 match current_value {
                     Value::Array {
@@ -801,7 +853,7 @@ impl Environment {
         index: usize,
         col: Option<usize>,
     ) -> Result<Value, CPSError> {
-        if let Some(address) = self.bindings.get(name) {
+        if let Some(address) = self.bindings.get_lower(name) {
             let current_value = self
                 .get_variable_at_address(*address)
                 .ok_or_else(|| CPSError {
@@ -1151,7 +1203,7 @@ impl Environment {
     }
 
     pub fn get_type(&mut self, name: &str) -> Result<Type, CPSError> {
-        if let Some(address) = self.bindings.get(name) {
+        if let Some(address) = self.bindings.get_lower(name) {
             let value = self
                 .get_variable_at_address(*address)
                 .ok_or_else(|| CPSError {
@@ -1182,7 +1234,7 @@ impl Environment {
     }
 
     pub fn declare_constant(&mut self, name: &str, value: &Value) -> Result<(), CPSError> {
-        if self.constants.contains(name) {
+        if self.constants.contains_lower(name) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Constant '{}' is already declared", name),
@@ -1192,13 +1244,13 @@ impl Environment {
                 source: None,
             });
         }
-        self.define(name.to_string(), value.clone())?;
-        self.constants.insert(name.to_string());
+        self.define(name, value.clone())?;
+        self.constants.insert_lower(name);
         Ok(())
     }
 
     pub fn is_constant(&self, name: &str) -> bool {
-        if self.constants.contains(name) {
+        if self.constants.contains_lower(name) {
             return true;
         }
         match &self.parent {
@@ -1208,7 +1260,7 @@ impl Environment {
     }
 
     pub fn define_enum(&mut self, name: &str, variants: &[String]) -> Result<(), CPSError> {
-        if self.types.contains_key(name) {
+        if self.types.contains_lower_key(name) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("The type '{}' is already defined", name),
@@ -1221,7 +1273,10 @@ impl Environment {
 
         // checked up front so a rejected declaration leaves nothing behind
         for (i, variant) in variants.iter().enumerate() {
-            if variants[..i].contains(variant) {
+            if variants[..i]
+                .iter()
+                .any(|earlier| earlier.eq_ignore_ascii_case(variant))
+            {
                 return Err(CPSError {
                     error_type: ErrorType::Runtime,
                     message: format!("'{}' is listed twice in the type '{}'", variant, name),
@@ -1245,27 +1300,29 @@ impl Environment {
             )?;
         }
 
-        self.types
-            .insert(name.to_owned(), Type::Enum(name.to_owned()));
-        self.enum_variants
-            .insert(name.to_owned(), variants.to_vec());
+        self.types.insert_lower(name, Type::Enum(name.to_owned()));
+        self.enum_variants.insert_lower(name, variants.to_vec());
 
         Ok(())
     }
 
-    pub fn check_if_valid_enum_value(&self, name: &str, variant: &str) -> bool {
-        if let Some(variants) = self.enum_variants.get(name) {
-            return variants.iter().any(|v| v == variant);
+    /// The variant as the type declared it, so a value entered in any case is stored in one spelling.
+    pub fn find_enum_variant(&self, name: &str, variant: &str) -> Option<String> {
+        if let Some(variants) = self.enum_variants.get_lower(name) {
+            return variants
+                .iter()
+                .find(|v| v.eq_ignore_ascii_case(variant))
+                .cloned();
         }
 
         match &self.parent {
-            Some(parent_rc) => parent_rc.borrow().check_if_valid_enum_value(name, variant),
-            None => false,
+            Some(parent_rc) => parent_rc.borrow().find_enum_variant(name, variant),
+            None => None,
         }
     }
 
     pub fn find_type_of_named_type(&self, name: &String) -> Result<Type, CPSError> {
-        if let Some(type_) = self.types.get(name) {
+        if let Some(type_) = self.types.get_lower(name) {
             return Ok(type_.to_owned());
         }
 
@@ -1282,8 +1339,17 @@ impl Environment {
         }
     }
 
-    pub fn define(&mut self, name: String, value: Value) -> Result<(), CPSError> {
-        if self.constants.contains(&name) {
+    pub fn is_declared_here(&self, name: &str) -> bool {
+        self.bindings.contains_lower_key(name)
+    }
+
+    /// Drops a name from this scope. The heap slot stays, as nothing else reclaims one either.
+    pub fn undeclare(&mut self, name: &str) {
+        self.bindings.remove_lower(name);
+    }
+
+    pub fn define(&mut self, name: &str, value: Value) -> Result<(), CPSError> {
+        if self.constants.contains_lower(name) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Cannot redefine constant '{}'", name),
@@ -1294,9 +1360,24 @@ impl Environment {
             });
         }
 
+        // only redefine in the current scope
+        if self.bindings.contains_lower_key(name) {
+            return Err(CPSError {
+                error_type: ErrorType::Runtime,
+                message: format!("'{}' has already been declared", name),
+                hint: Some(
+                    "Names are case insensitive, so two declarations cannot differ only in case."
+                        .to_string(),
+                ),
+                line: 0,
+                column: 0,
+                source: None,
+            });
+        }
+
         let current_addr = *self.next_address.borrow();
         self.heap.borrow_mut().insert(current_addr, value.clone());
-        self.bindings.insert(name, current_addr);
+        self.bindings.insert_lower(name, current_addr);
 
         // ignore this, pointer arithmatic in the pseudocode works differently (+1 to a mem address will bring u to the next value past the array)
         // match &value {
@@ -1312,12 +1393,8 @@ impl Environment {
         Ok(())
     }
 
-    pub fn set_variable_at_address(
-        &mut self,
-        name: String,
-        address: usize,
-    ) -> Result<(), CPSError> {
-        if self.constants.contains(&name) {
+    pub fn set_variable_at_address(&mut self, name: &str, address: usize) -> Result<(), CPSError> {
+        if self.constants.contains_lower(name) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Cannot redefine constant '{}'", name),
@@ -1328,13 +1405,13 @@ impl Environment {
             });
         }
 
-        self.bindings.insert(name, address); // create variable at that specific address
+        self.bindings.insert_lower(name, address); // create variable at that specific address
 
         Ok(())
     }
 
-    pub fn find_address_of_variable(&mut self, name: String) -> Option<usize> {
-        let address = self.bindings.get(&name);
+    pub fn find_address_of_variable(&mut self, name: &str) -> Option<usize> {
+        let address = self.bindings.get_lower(name);
 
         match address {
             Some(addr) => {

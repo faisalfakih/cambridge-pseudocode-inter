@@ -4,21 +4,37 @@ use crate::{
 };
 use rand::random_range;
 
+pub const BUILTIN_IDENTIFIERS: [&str; 13] = [
+    "RIGHT",
+    "LENGTH",
+    "MID",
+    "SUBSTRING",
+    "LCASE",
+    "UCASE",
+    "INT",
+    "RAND",
+    "NUM_TO_STR",
+    "STR_TO_NUM",
+    "IS_NUM",
+    "ASC",
+    "CHR",
+];
+
 pub fn call_builtin(name: String, args: &[Value]) -> Result<Option<Value>, CPSError> {
     match name.as_str() {
-        "RIGHT" => builtin_right(args),
-        "LENGTH" => builtin_length(args),
-        "MID" => builtin_mid(args, "MID"),
-        "SUBSTRING" => builtin_mid(args, "SUBSTRING"), // Alias for MID
-        "LCASE" => builtin_lcase(args),
-        "UCASE" => builtin_ucase(args),
-        "INT" => builtin_int(args),
-        "RAND" => builtin_rand(args),
-        "NUM_TO_STR" => builtin_num_to_str(args),
-        "STR_TO_NUM" => builtin_str_to_num(args),
-        "IS_NUM" => builtin_is_num(args),
-        "ASC" => builtin_asc(args),
-        "CHR" => builtin_chr(args),
+        name if name == BUILTIN_IDENTIFIERS[0] => builtin_right(args),
+        name if name == BUILTIN_IDENTIFIERS[1] => builtin_length(args),
+        name if name == BUILTIN_IDENTIFIERS[2] => builtin_mid(args, "MID"),
+        name if name == BUILTIN_IDENTIFIERS[3] => builtin_mid(args, "SUBSTRING"), // Alias for MID
+        name if name == BUILTIN_IDENTIFIERS[4] => builtin_lcase(args),
+        name if name == BUILTIN_IDENTIFIERS[5] => builtin_ucase(args),
+        name if name == BUILTIN_IDENTIFIERS[6] => builtin_int(args),
+        name if name == BUILTIN_IDENTIFIERS[7] => builtin_rand(args),
+        name if name == BUILTIN_IDENTIFIERS[8] => builtin_num_to_str(args),
+        name if name == BUILTIN_IDENTIFIERS[9] => builtin_str_to_num(args),
+        name if name == BUILTIN_IDENTIFIERS[10] => builtin_is_num(args),
+        name if name == BUILTIN_IDENTIFIERS[11] => builtin_asc(args),
+        name if name == BUILTIN_IDENTIFIERS[12] => builtin_chr(args),
         _ => Err(CPSError {
             error_type: ErrorType::Runtime,
             message: format!("Unknown builtin function: {}", name),
