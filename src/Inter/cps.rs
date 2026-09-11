@@ -21,7 +21,7 @@ pub enum Type {
     Enum(String),
 }
 
-// make identifiers case sensitive
+// make identifiers case insensitive
 trait InsertLowerMap<V, K: AsRef<str>> {
     fn insert_lower(&mut self, key: K, value: V);
     fn get_lower(&self, key: K) -> Option<&V>;
