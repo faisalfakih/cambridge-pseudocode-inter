@@ -1,7 +1,7 @@
 //! Run with `cargo test --test regression`; append a test-name filter to narrow the run.
 //! Covers the implemented 2026-guide subset and interpreter extensions.
 //! Records, pointers, sets, OOP, random-access files, WASM replay and CLI flags are excluded.
-//! LCASE/UCASE accept and return CHAR, as specified in guide section 5.5.
+//! LCASE/UCASE preserve CHAR inputs (guide section 5.5) and STRING inputs (extension).
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -1027,22 +1027,152 @@ case!(
 );
 
 case!(
-    case_090_reject_builtin_lcase_string,
-    "reject LCASE string input",
-    "OUTPUT LCASE(\"AbC\")\n",
+    case_090_builtin_lcase_string,
+    "LCASE string input returns STRING",
+    "DECLARE Result : STRING\nResult <- LCASE(\"Hello\")\nOUTPUT Result\n",
+    "hello\n",
     "",
-    "",
-    Some("LCASE argument 1 must be a char"),
+    None,
     &[]
 );
 
 case!(
-    case_091_reject_builtin_ucase_string,
-    "reject UCASE string input",
-    "OUTPUT UCASE(\"AbC\")\n",
+    case_091_builtin_ucase_string,
+    "UCASE string input returns STRING",
+    "DECLARE Result : STRING\nResult <- UCASE(\"Hello\")\nOUTPUT Result\n",
+    "HELLO\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_lcase_char_preserves_type,
+    "LCASE char input returns CHAR",
+    "DECLARE Result : CHAR\nResult <- LCASE('A')\nOUTPUT Result\n",
+    "a\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_ucase_char_preserves_type,
+    "UCASE char input returns CHAR",
+    "DECLARE Result : CHAR\nResult <- UCASE('a')\nOUTPUT Result\n",
+    "A\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_lcase_single_character_string,
+    "LCASE single-character string stays STRING",
+    "DECLARE Result : STRING\nResult <- LCASE(\"A\")\nOUTPUT Result\n",
+    "a\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_ucase_single_character_string,
+    "UCASE single-character string stays STRING",
+    "DECLARE Result : STRING\nResult <- UCASE(\"a\")\nOUTPUT Result\n",
+    "A\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_lcase_empty_string,
+    "LCASE empty string returns empty STRING",
+    "DECLARE Result : STRING\nResult <- LCASE(\"\")\nOUTPUT Result\n",
+    "\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_ucase_empty_string,
+    "UCASE empty string returns empty STRING",
+    "DECLARE Result : STRING\nResult <- UCASE(\"\")\nOUTPUT Result\n",
+    "\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_lcase_unicode_char_expansion_rejected,
+    "LCASE rejects a CHAR mapping to two Unicode scalars",
+    "OUTPUT LCASE('İ')\n",
     "",
     "",
-    Some("UCASE argument 1 must be a char"),
+    Some("exactly one character"),
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_char_expansion_rejected,
+    "UCASE rejects a CHAR mapping to two Unicode scalars",
+    "OUTPUT UCASE('ß')\n",
+    "",
+    "",
+    Some("exactly one character"),
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_ligature_expansion_rejected,
+    "UCASE rejects a CHAR mapping to three Unicode scalars",
+    "OUTPUT UCASE('ﬃ')\n",
+    "",
+    "",
+    Some("exactly one character"),
+    &[]
+);
+
+case!(
+    builtin_lcase_unicode_char_preserved,
+    "LCASE accepts a multi-byte single-scalar CHAR result",
+    "DECLARE Result : CHAR\nResult <- LCASE('É')\nOUTPUT Result\n",
+    "é\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_char_preserved,
+    "UCASE accepts a multi-byte single-scalar CHAR result",
+    "DECLARE Result : CHAR\nResult <- UCASE('é')\nOUTPUT Result\n",
+    "É\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_lcase_unicode_string_expansion_preserved,
+    "LCASE keeps every scalar of an expanded STRING result",
+    "DECLARE Result : STRING\nResult <- LCASE(\"İ\")\nOUTPUT Result\n",
+    "i̇\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_string_expansion_preserved,
+    "UCASE keeps every scalar of an expanded STRING result",
+    "DECLARE Result : STRING\nResult <- UCASE(\"ßﬃ\")\nOUTPUT Result\n",
+    "SSFFI\n",
+    "",
+    None,
     &[]
 );
 

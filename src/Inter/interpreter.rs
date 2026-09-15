@@ -3,6 +3,7 @@ use std::collections::HashMap;
 // use std::fs::{self, File};
 use std::{cell::RefCell, rc::Rc};
 
+use crate::Inter::builtins::BUILTIN_IDENTIFIERS;
 // Thread+channel web mode is not available on WASM.
 #[cfg(not(target_arch = "wasm32"))]
 use crate::Inter::web::{WebContext, WebEvent};
@@ -14,22 +15,6 @@ use crate::Parser::ast::{
     Ast, BinaryExpr, BlockStmt, CaseCondition, Expr, FileMode, PassingValue, Stmt,
 };
 use crate::Parser::parser::ast_to_expr;
-
-const BUILTIN_FUNCTIONS: &[&str] = &[
-    "RIGHT",
-    "LENGTH",
-    "MID",
-    "SUBSTRING",
-    "LCASE",
-    "UCASE",
-    "INT",
-    "RAND",
-    "NUM_TO_STR",
-    "STR_TO_NUM",
-    "IS_NUM",
-    "ASC",
-    "CHR",
-];
 
 /// A file living in memory (used for file I/O in web / WASM modes, and as the "write log" for replay mode).
 #[derive(Clone, Debug)]
@@ -1932,7 +1917,7 @@ impl Interpreter {
 
         // first check if procedure is a builtin
         // Keep builtins to be case sensitive
-        if BUILTIN_FUNCTIONS.contains(&identifier) {
+        if BUILTIN_IDENTIFIERS.contains(&identifier) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!(
@@ -1993,7 +1978,7 @@ impl Interpreter {
         is_statement: bool, // check to see if it's a statement
                             // if it is a statement, reject functions, otherwise, reject procedures
     ) -> Result<Value, CPSError> {
-        let is_builtin = BUILTIN_FUNCTIONS.contains(&identifier);
+        let is_builtin = BUILTIN_IDENTIFIERS.contains(&identifier);
         let is_function = if is_builtin {
             true
         } else {
@@ -2316,7 +2301,7 @@ impl Interpreter {
         body: &BlockStmt,
     ) -> Result<(), CPSError> {
         // first check if function is a builtin
-        if BUILTIN_FUNCTIONS.contains(&identifier) {
+        if BUILTIN_IDENTIFIERS.contains(&identifier) {
             return Err(CPSError {
                 error_type: ErrorType::Runtime,
                 message: format!("Cannot redefine builtin function: {}", identifier),

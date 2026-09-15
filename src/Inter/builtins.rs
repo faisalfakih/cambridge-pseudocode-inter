@@ -1,6 +1,6 @@
 use crate::{
     errortype::{CPSError, ErrorType},
-    Inter::cps::Value,
+    Inter::cps::{Type, Value},
 };
 use rand::random_range;
 
@@ -52,6 +52,26 @@ fn expect_string(value: &Value, func: &str, pos: usize) -> Result<String, CPSErr
         // allow char values as strings for now (may change later if asked to)
         Value::String(s) => Ok(s.clone()),
         Value::Char(s) => Ok(s.to_string().clone()),
+        _ => Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("{} argument {} must be a string", func, pos),
+            hint: None,
+            line: 0,
+            column: 0,
+            source: None,
+        }),
+    }
+}
+
+fn expect_string_or_char(
+    value: &Value,
+    func: &str,
+    pos: usize,
+) -> Result<(String, Type), CPSError> {
+    match value {
+        // allow char values as strings for now (may change later if asked to)
+        Value::String(s) => Ok((s.clone(), Type::String)),
+        Value::Char(s) => Ok((s.to_string().clone(), Type::Char)),
         _ => Err(CPSError {
             error_type: ErrorType::Runtime,
             message: format!("{} argument {} must be a string", func, pos),
@@ -211,9 +231,29 @@ fn builtin_lcase(args: &[Value]) -> Result<Option<Value>, CPSError> {
         return Err(arg_count_error("LCASE", 1, args.len()));
     }
 
-    let ch = expect_char(&args[0], "LCASE", 1)?;
-    let result = ch.to_lowercase().next().unwrap_or(ch);
-    Ok(Some(Value::Char(result)))
+    let (s, type_) = expect_string_or_char(&args[0], "LCASE", 1)?;
+    let result = s.to_lowercase();
+    match type_ {
+        Type::Char => {
+            let mut chars = result.chars();
+            let ch_val = match (chars.next(), chars.next()) {
+                (Some(c), None) => c,
+                _ => {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: "LCASE result must contain exactly one character for a CHAR argument".to_string(),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    })
+                }
+            };
+            Ok(Some(Value::Char(ch_val)))
+        }
+        Type::String => Ok(Some(Value::String(result))),
+        _ => unreachable!("impossible to get here"),
+    }
 }
 
 fn builtin_ucase(args: &[Value]) -> Result<Option<Value>, CPSError> {
@@ -221,9 +261,29 @@ fn builtin_ucase(args: &[Value]) -> Result<Option<Value>, CPSError> {
         return Err(arg_count_error("UCASE", 1, args.len()));
     }
 
-    let ch = expect_char(&args[0], "UCASE", 1)?;
-    let result = ch.to_uppercase().next().unwrap_or(ch);
-    Ok(Some(Value::Char(result)))
+    let (s, type_) = expect_string_or_char(&args[0], "UCASE", 1)?;
+    let result = s.to_uppercase();
+    match type_ {
+        Type::Char => {
+            let mut chars = result.chars();
+            let ch_val = match (chars.next(), chars.next()) {
+                (Some(c), None) => c,
+                _ => {
+                    return Err(CPSError {
+                        error_type: ErrorType::Runtime,
+                        message: "UCASE result must contain exactly one character for a CHAR argument".to_string(),
+                        hint: None,
+                        line: 0,
+                        column: 0,
+                        source: None,
+                    })
+                }
+            };
+            Ok(Some(Value::Char(ch_val)))
+        }
+        Type::String => Ok(Some(Value::String(result))),
+        _ => unreachable!("impossible to get here"),
+    }
 }
 
 fn builtin_int(args: &[Value]) -> Result<Option<Value>, CPSError> {
