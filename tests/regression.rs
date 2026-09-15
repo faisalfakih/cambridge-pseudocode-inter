@@ -1107,6 +1107,76 @@ case!(
 );
 
 case!(
+    builtin_lcase_unicode_char_expansion_rejected,
+    "LCASE rejects a CHAR mapping to two Unicode scalars",
+    "OUTPUT LCASE('İ')\n",
+    "",
+    "",
+    Some("exactly one character"),
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_char_expansion_rejected,
+    "UCASE rejects a CHAR mapping to two Unicode scalars",
+    "OUTPUT UCASE('ß')\n",
+    "",
+    "",
+    Some("exactly one character"),
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_ligature_expansion_rejected,
+    "UCASE rejects a CHAR mapping to three Unicode scalars",
+    "OUTPUT UCASE('ﬃ')\n",
+    "",
+    "",
+    Some("exactly one character"),
+    &[]
+);
+
+case!(
+    builtin_lcase_unicode_char_preserved,
+    "LCASE accepts a multi-byte single-scalar CHAR result",
+    "DECLARE Result : CHAR\nResult <- LCASE('É')\nOUTPUT Result\n",
+    "é\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_char_preserved,
+    "UCASE accepts a multi-byte single-scalar CHAR result",
+    "DECLARE Result : CHAR\nResult <- UCASE('é')\nOUTPUT Result\n",
+    "É\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_lcase_unicode_string_expansion_preserved,
+    "LCASE keeps every scalar of an expanded STRING result",
+    "DECLARE Result : STRING\nResult <- LCASE(\"İ\")\nOUTPUT Result\n",
+    "i̇\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    builtin_ucase_unicode_string_expansion_preserved,
+    "UCASE keeps every scalar of an expanded STRING result",
+    "DECLARE Result : STRING\nResult <- UCASE(\"ßﬃ\")\nOUTPUT Result\n",
+    "SSFFI\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
     case_092_builtin_int_3_9,
     "builtin INT(3.9)",
     "OUTPUT INT(3.9)\n",

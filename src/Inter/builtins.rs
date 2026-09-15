@@ -235,12 +235,13 @@ fn builtin_lcase(args: &[Value]) -> Result<Option<Value>, CPSError> {
     let result = s.to_lowercase();
     match type_ {
         Type::Char => {
-            let ch_val = match result.chars().next() {
-                Some(c) => c,
-                None => {
+            let mut chars = result.chars();
+            let ch_val = match (chars.next(), chars.next()) {
+                (Some(c), None) => c,
+                _ => {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
-                        message: "LCASE produced an empty result for a CHAR argument".to_string(),
+                        message: "LCASE result must contain exactly one character for a CHAR argument".to_string(),
                         hint: None,
                         line: 0,
                         column: 0,
@@ -264,12 +265,13 @@ fn builtin_ucase(args: &[Value]) -> Result<Option<Value>, CPSError> {
     let result = s.to_uppercase();
     match type_ {
         Type::Char => {
-            let ch_val = match result.chars().next() {
-                Some(c) => c,
-                None => {
+            let mut chars = result.chars();
+            let ch_val = match (chars.next(), chars.next()) {
+                (Some(c), None) => c,
+                _ => {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
-                        message: "UCASE produced an empty result for a CHAR argument".to_string(),
+                        message: "UCASE result must contain exactly one character for a CHAR argument".to_string(),
                         hint: None,
                         line: 0,
                         column: 0,
