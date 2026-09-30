@@ -1131,7 +1131,7 @@ impl Parser {
             identifier = self.advance();
             if identifier.token_type != TokenType::Identifier {
                 return Err(CPSError { error_type: ErrorType::Syntax, 
-                message: "Expected an identifier after comma in the DECLARE statement.".to_string(), hint: Some("Make sure to write a variable name after 'a'".to_string()), 
+                message: "Expected an identifier after comma in the DECLARE statement.".to_string(), hint: Some("Make sure to write a variable name after a ','".to_string()), 
                 line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
             }
 
