@@ -1115,7 +1115,9 @@ impl Parser {
     fn parse_declaration(&mut self) -> Result<Ast, CPSError> {
         self.advance();
         // expect identifier 
-        let identifier = self.advance();
+        let mut identifier = self.advance();
+        let mut identifiers: Vec<String> = Vec::new();
+        identifiers.push(identifier.lexeme);
         if identifier.token_type != TokenType::Identifier {
             return Err(CPSError { error_type: ErrorType::Syntax, 
                 message: "Expected an identifier after declare".to_string(), hint: Some("Make sure to write a variable name after DECLARE".to_string()), 
@@ -1123,8 +1125,21 @@ impl Parser {
         }
 
         // consume arrow
-        let colon = self.advance();
-        if colon.token_type != TokenType::Colon {
+        let mut colon_or_comma = self.advance();
+        // check if its a comma instead of a colon 
+        while colon_or_comma.token_type == TokenType::Comma {
+            identifier = self.advance();
+            if identifier.token_type != TokenType::Identifier {
+                return Err(CPSError { error_type: ErrorType::Syntax, 
+                message: "Expected an identifier after comma in the DECLARE statement.".to_string(), hint: Some("Make sure to write a variable name after a ','".to_string()), 
+                line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
+            }
+
+            identifiers.push(identifier.lexeme);
+
+            colon_or_comma = self.advance()
+        }
+        if colon_or_comma.token_type != TokenType::Colon {
             return Err(CPSError { error_type: ErrorType::Syntax, 
                 message: "Expected a colon after the identifier".to_string(), hint: Some("Make sure to use a colon after the variable name and before the data type".to_string()), 
                 line: identifier.line, column: identifier.column, source: Some(self.source.clone()) });
@@ -1132,7 +1147,7 @@ impl Parser {
 
         let data_type = self.parse_type(TypeContext::Declaration)?;
 
-        Ok(Ast::Stmt(Stmt::Decleration { identifier: identifier.lexeme, type_: data_type }))
+        Ok(Ast::Stmt(Stmt::Decleration { identifiers, type_: data_type }))
     }
 
     fn parse_constant_declaration(&mut self) -> Result<Ast, CPSError> {

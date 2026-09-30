@@ -108,7 +108,7 @@ pub enum Stmt {
         value: Value,
     },
     Decleration {
-        identifier: String,
+        identifiers: Vec<String>,
         type_: Type,
     },
     Input {
@@ -396,8 +396,8 @@ impl Stmt {
                     format!("{}{} := {}", indent_str, identifier, value.to_prefix())
                 }
             }
-            Stmt::Decleration { identifier, type_ } => {
-                format!("{}DECLARE {} : {:?}", indent_str, identifier, type_)
+            Stmt::Decleration { identifiers, type_ } => {
+                format!("{}DECLARE {:?} : {:?}", indent_str, identifiers, type_)
             }
             Stmt::Constant { identifier, value } => {
                 format!("{}CONST {} = {:?}", indent_str, identifier, value)
