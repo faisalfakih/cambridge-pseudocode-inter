@@ -254,8 +254,8 @@ impl Interpreter {
 
         let result = match statement {
             Stmt::Output { target } => self.evaluate_output_stmt(target),
-            Stmt::Decleration { identifier, type_ } => {
-                self.evaluate_declaration_stmt(identifier, type_)
+            Stmt::Decleration { identifiers, type_ } => {
+                self.evaluate_declaration_stmt(identifiers, type_)
             }
             Stmt::Assignment {
                 identifier,
@@ -1877,14 +1877,16 @@ impl Interpreter {
 
     fn evaluate_declaration_stmt(
         &mut self,
-        identifier: &str,
+        identifiers: &Vec<String>,
         type_: &Type,
     ) -> Result<(), CPSError> {
         let inital_value = self.default_value(type_)?;
 
-        self.current_env
-            .borrow_mut()
-            .define(identifier, inital_value)?;
+        for identifier in identifiers {
+            self.current_env
+                .borrow_mut()
+                .define(&identifier, inital_value.clone())?;
+        }
         Ok(())
     }
 

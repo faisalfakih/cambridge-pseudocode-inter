@@ -3686,3 +3686,245 @@ case!(
     Some("error"),
     &[]
 );
+
+// DECLARE naming several identifiers of one type on a single line
+
+case!(
+    spec_single_line_declare_three_integers,
+    "one DECLARE naming three integers",
+    "DECLARE A, B, C : INTEGER\nA <- 1\nB <- 2\nC <- 3\nOUTPUT A, B, C\n",
+    "123\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_gives_every_name_a_default,
+    "every name in the list starts at its type's default",
+    "DECLARE A, B, C : INTEGER\nOUTPUT A, B, C\n",
+    "000\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_stores_names_separately,
+    "writing one name in the list leaves the others alone",
+    "DECLARE A, B : INTEGER\nA <- 1\nB <- 2\nA <- 9\nOUTPUT A, \" \", B\n",
+    "9 2\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_string,
+    "one DECLARE naming two strings",
+    "DECLARE X, Y : STRING\nX <- \"a\"\nY <- \"b\"\nOUTPUT X & Y\n",
+    "ab\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_real,
+    "one DECLARE naming two reals",
+    "DECLARE P, Q : REAL\nP <- 1.5\nOUTPUT P, \" \", Q\n",
+    "1.5 0\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_boolean,
+    "one DECLARE naming two booleans",
+    "DECLARE P, Q : BOOLEAN\nP <- TRUE\nOUTPUT P, \" \", Q\n",
+    "TRUE FALSE\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_char,
+    "one DECLARE naming two chars",
+    "DECLARE P, Q : CHAR\nP <- 'a'\nQ <- 'b'\nOUTPUT P, Q\n",
+    "ab\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_date,
+    "one DECLARE naming two dates",
+    "DECLARE P, Q : DATE\nP <- 05/03/2026\nOUTPUT P, \" \", Q\n",
+    "05/03/2026 01/01/1900\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_array,
+    "one DECLARE naming two arrays of the same bounds",
+    "DECLARE A, B : ARRAY[1:2] OF INTEGER\nA[1] <- 7\nB[1] <- 8\nOUTPUT A[1], \" \", B[1]\n",
+    "7 8\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_enum_type,
+    "one DECLARE naming two variables of an enumerated type",
+    "TYPE Season = (Spring, Summer)\nDECLARE A, B : Season\nA <- Spring\nB <- Summer\nOUTPUT A, \" \", B\n",
+    "Spring Summer\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_six_names,
+    "a longer list of names",
+    "DECLARE A, B, C, D, E, F : INTEGER\nF <- 6\nOUTPUT A, F\n",
+    "06\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_inside_a_procedure,
+    "a list of names declared in a procedure's scope",
+    "PROCEDURE P()\nDECLARE L, M : INTEGER\nL <- 1\nM <- 2\nOUTPUT L, M\nENDPROCEDURE\nCALL P()\n",
+    "12\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_names_are_case_insensitive,
+    "names from a list are reached in any case",
+    "DECLARE Alpha, Beta : INTEGER\nALPHA <- 1\nOUTPUT beta, alpha\n",
+    "01\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_counter_survives_a_for_loop,
+    "a counter declared in a list outlives its loop",
+    "DECLARE i, n : INTEGER\nn <- 3\nFOR i <- 1 TO n\nOUTPUT i\nNEXT i\nOUTPUT \"after=\", i\n",
+    "1\n2\n3\nafter=3\n",
+    "",
+    None,
+    &[]
+);
+
+case!(
+    spec_single_line_declare_type_applies_to_every_name,
+    "the declared type applies to every name in the list",
+    "DECLARE A, B : INTEGER\nB <- \"str\"\n",
+    "",
+    "",
+    Some("type mismatch"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_repeating_a_name,
+    "reject a name listed twice in one DECLARE",
+    "DECLARE A, A : INTEGER\n",
+    "",
+    "",
+    Some("already been declared"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_repeating_a_name_in_another_case,
+    "reject names in one DECLARE differing only by case",
+    "DECLARE Total, TOTAL : INTEGER\n",
+    "",
+    "",
+    Some("already been declared"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_colliding_with_an_earlier_one,
+    "reject a list containing an already declared name",
+    "DECLARE A : INTEGER\nDECLARE B, A : STRING\n",
+    "",
+    "",
+    Some("already been declared"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_colliding_with_a_constant,
+    "reject a list containing a constant's name",
+    "CONSTANT Max = 5\nDECLARE A, MAX : INTEGER\n",
+    "",
+    "",
+    Some("constant"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_trailing_comma,
+    "reject a trailing comma in a DECLARE list",
+    "DECLARE A, B, : INTEGER\n",
+    "",
+    "",
+    Some("identifier after comma"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_leading_comma,
+    "reject a leading comma in a DECLARE list",
+    "DECLARE , A : INTEGER\n",
+    "",
+    "",
+    Some("identifier after declare"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_repeated_comma,
+    "reject two commas in a row in a DECLARE list",
+    "DECLARE A,, B : INTEGER\n",
+    "",
+    "",
+    Some("identifier after comma"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_missing_colon,
+    "reject a DECLARE list with no colon before the type",
+    "DECLARE A, B INTEGER\n",
+    "",
+    "",
+    Some("colon"),
+    &[]
+);
+
+case!(
+    spec_reject_single_line_declare_keyword_in_the_list,
+    "reject a keyword used as a name in a DECLARE list",
+    "DECLARE A, WHILE : INTEGER\n",
+    "",
+    "",
+    Some("identifier after comma"),
+    &[]
+);
