@@ -5215,3 +5215,1502 @@ OUTPUT TO_UPPER(C), ":", TO_LOWER(C), ":", C
         }
     }
 }
+mod parameter_passing {
+    use super::*;
+    use cambridge_pseudocode_interpreter::Inter::step_interpreter::{StepEvent, StepInterpreter};
+
+    fn check_modes(markers: &[&str], byref: &[bool]) {
+        assert_eq!(markers.len(), byref.len());
+        let parameters = markers
+            .iter()
+            .enumerate()
+            .map(|(i, marker)| format!("{marker} P{i} : INTEGER"))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let mut source = format!("PROCEDURE Change({parameters})\n");
+        let mut expected = String::new();
+        for i in 0..markers.len() {
+            source.push_str(&format!("P{i} <- P{i} + {}\nOUTPUT P{i}\n", 100 + i));
+            expected.push_str(&format!("{}\n", 110 + 2 * i));
+        }
+        source.push_str("ENDPROCEDURE\n");
+        for i in 0..markers.len() {
+            source.push_str(&format!("DECLARE V{i} : INTEGER\nV{i} <- {}\n", 10 + i));
+        }
+        let arguments = (0..markers.len())
+            .map(|i| format!("V{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        source.push_str(&format!("CALL Change({arguments})\n"));
+        for (i, is_ref) in byref.iter().enumerate() {
+            source.push_str(&format!("OUTPUT V{i}\n"));
+            expected.push_str(&format!("{}\n", if *is_ref { 110 + 2 * i } else { 10 + i }));
+        }
+        run_case(
+            &format!("passing modes {markers:?}"),
+            &source,
+            &expected,
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn unspecified_parameters_default_to_byval() {
+        check_modes(&["", "", ""], &[false, false, false]);
+    }
+
+    #[test]
+    fn byref_applies_to_all_following_parameters() {
+        check_modes(&["BYREF", "", ""], &[true, true, true]);
+    }
+
+    #[test]
+    fn byval_switches_following_parameters_back_to_copies() {
+        check_modes(&["BYREF", "", "BYVAL", ""], &[true, true, false, false]);
+    }
+
+    #[test]
+    fn passing_mode_can_switch_back_to_byref() {
+        check_modes(
+            &["BYREF", "BYVAL", "", "BYREF", ""],
+            &[true, false, false, true, true],
+        );
+    }
+
+    #[test]
+    fn initial_default_ends_at_first_byref() {
+        check_modes(&["", "", "BYREF", ""], &[false, false, true, true]);
+    }
+
+    #[test]
+    fn every_five_parameter_marker_combination() {
+        for pattern in 0..243 {
+            let mut digits = pattern;
+            let mut markers = Vec::new();
+            for _ in 0..5 {
+                markers.push(["", "BYVAL", "BYREF"][digits % 3]);
+                digits /= 3;
+            }
+            let expected = (0..5)
+                .map(|i| markers[..=i].iter().rfind(|marker| !marker.is_empty()) == Some(&"BYREF"))
+                .collect::<Vec<_>>();
+            check_modes(&markers, &expected);
+        }
+    }
+
+    case!(
+        mode_resets_between_declarations,
+        "each declaration starts with BYVAL",
+        r#"
+PROCEDURE First(BYREF A : INTEGER, B : INTEGER)
+A <- 10
+B <- 20
+ENDPROCEDURE
+PROCEDURE Second(A : INTEGER, B : INTEGER)
+A <- 30
+B <- 40
+OUTPUT A, ":", B
+ENDPROCEDURE
+FUNCTION Third(A : INTEGER, B : INTEGER) RETURNS INTEGER
+A <- 50
+B <- 60
+RETURN A + B
+ENDFUNCTION
+DECLARE X : INTEGER
+DECLARE Y : INTEGER
+X <- 1
+Y <- 2
+CALL First(X, Y)
+CALL Second(X, Y)
+OUTPUT Third(X, Y)
+OUTPUT X, ":", Y
+"#,
+        "30:40\n110\n10:20\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        same_variable_has_live_aliases_and_independent_copies,
+        "BYREF aliases share storage and BYVAL takes a snapshot",
+        r#"
+PROCEDURE Change(BYREF A : INTEGER, B : INTEGER, BYVAL C : INTEGER, D : INTEGER)
+A <- 10
+OUTPUT B, ":", C, ":", D
+B <- B + 1
+C <- 20
+OUTPUT A, ":", B, ":", C, ":", D
+ENDPROCEDURE
+DECLARE X : INTEGER
+X <- 1
+CALL Change(X, X, X, X)
+OUTPUT X
+"#,
+        "10:1:1\n11:11:20:1\n11\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        nested_forwarding_respects_each_callee_mode,
+        "references can be forwarded and copies stay local",
+        r#"
+PROCEDURE Inner(BYREF A : INTEGER, B : INTEGER)
+A <- A + 10
+B <- B + 20
+ENDPROCEDURE
+PROCEDURE Copy(A : INTEGER, B : INTEGER)
+A <- 100
+B <- 200
+ENDPROCEDURE
+PROCEDURE Outer(BYREF A : INTEGER, BYVAL B : INTEGER)
+CALL Inner(A, B)
+CALL Copy(A, B)
+OUTPUT A, ":", B
+ENDPROCEDURE
+DECLARE X : INTEGER
+DECLARE Y : INTEGER
+X <- 1
+Y <- 2
+CALL Outer(X, Y)
+OUTPUT X, ":", Y
+CALL Outer(X, Y)
+OUTPUT X, ":", Y
+"#,
+        "11:22\n11:2\n21:22\n21:2\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        arrays_follow_inherited_modes,
+        "array references alias while array copies stay independent",
+        r#"
+PROCEDURE Change(BYREF A : ARRAY[1:2] OF INTEGER, B : ARRAY[1:2] OF INTEGER,
+BYVAL C : ARRAY[1:2] OF INTEGER, D : ARRAY[1:2] OF INTEGER)
+A[1] <- 10
+B[2] <- 20
+C[1] <- 30
+D[2] <- 40
+OUTPUT A[1], ":", B[2], ":", C[1], ":", C[2], ":", D[1], ":", D[2]
+ENDPROCEDURE
+DECLARE V : ARRAY[1:2] OF INTEGER
+V[1] <- 1
+V[2] <- 2
+CALL Change(V, V, V, V)
+OUTPUT V[1], ":", V[2]
+"#,
+        "10:20:30:2:1:40\n10:20\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        mode_survives_parameter_type_changes,
+        "passing mode carries across different parameter types",
+        r#"
+TYPE Season = (Spring, Summer)
+PROCEDURE Change(BYREF A : INTEGER, B : STRING, C : Season, BYVAL D : CHAR, E : BOOLEAN)
+A <- 7
+B <- "changed"
+C <- Summer
+D <- 'Z'
+E <- TRUE
+OUTPUT D, ":", E
+ENDPROCEDURE
+DECLARE N : INTEGER
+DECLARE S : STRING
+DECLARE SeasonValue : Season
+DECLARE C : CHAR
+DECLARE Flag : BOOLEAN
+S <- "original"
+SeasonValue <- Spring
+C <- 'a'
+Flag <- FALSE
+CALL Change(N, S, SeasonValue, C, Flag)
+OUTPUT N, ":", S, ":", SeasonValue, ":", C, ":", Flag
+"#,
+        "Z:TRUE\n7:changed:Summer:a:FALSE\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        byval_after_byref_accepts_expressions,
+        "explicit BYVAL permits literals expressions and function results",
+        r#"
+FUNCTION Number() RETURNS INTEGER
+RETURN 8
+ENDFUNCTION
+PROCEDURE Change(BYREF A : INTEGER, BYVAL B : INTEGER, C : INTEGER, D : INTEGER)
+A <- B + C + D
+B <- 99
+C <- 99
+D <- 99
+ENDPROCEDURE
+DECLARE X : INTEGER
+X <- 1
+CALL Change(X, 2, X + 3, Number())
+OUTPUT X
+"#,
+        "14\n",
+        "",
+        None,
+        &[]
+    );
+
+    #[test]
+    fn inherited_byref_rejects_nonvariable_arguments() {
+        for argument in ["2", "X + 1", "Number()", "Fixed"] {
+            let source = format!("CONSTANT Fixed = 2\nFUNCTION Number() RETURNS INTEGER\nRETURN 2\nENDFUNCTION\nPROCEDURE Change(BYREF A : INTEGER, B : INTEGER)\nENDPROCEDURE\nDECLARE X : INTEGER\nCALL Change(X, {argument})\n");
+            run_case(argument, &source, "", "", Some("BYREF"), &[]);
+        }
+    }
+
+    case!(inherited_byref_requires_exact_type, "inherited BYREF rejects REAL for INTEGER", "PROCEDURE Change(BYREF A : INTEGER, B : INTEGER)\nENDPROCEDURE\nDECLARE X : INTEGER\nDECLARE Y : REAL\nY <- 2\nCALL Change(X, Y)\n", "", "", Some("Type mismatch for BYREF parameter 'B'"), &[]);
+
+    case!(
+        functions_copy_every_parameter,
+        "default and explicit BYVAL function parameters do not modify callers",
+        r#"
+FUNCTION Change(A : INTEGER, BYVAL B : INTEGER, C : INTEGER) RETURNS INTEGER
+A <- 10
+B <- 20
+C <- 30
+RETURN A + B + C
+ENDFUNCTION
+DECLARE X : INTEGER
+X <- 1
+OUTPUT Change(X, X, X)
+OUTPUT X
+OUTPUT Change(2, 3 + 4, 5)
+"#,
+        "60\n1\n60\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        functions_copy_array_parameters,
+        "function arrays are copied for all BYVAL parameters",
+        r#"
+FUNCTION Change(A : ARRAY[1:2] OF INTEGER, BYVAL B : ARRAY[1:2] OF INTEGER,
+C : ARRAY[1:2] OF INTEGER) RETURNS INTEGER
+A[1] <- 10
+B[2] <- 20
+C[1] <- 30
+RETURN A[1] + A[2] + B[1] + B[2] + C[1] + C[2]
+ENDFUNCTION
+DECLARE V : ARRAY[1:2] OF INTEGER
+V[1] <- 1
+V[2] <- 2
+OUTPUT Change(V, V, V)
+OUTPUT V[1], ":", V[2]
+"#,
+        "65\n1:2\n",
+        "",
+        None,
+        &[]
+    );
+
+    #[test]
+    fn functions_reject_byref_at_every_parameter_position() {
+        for parameters in [
+            "BYREF A : INTEGER, B : INTEGER, C : INTEGER",
+            "A : INTEGER, BYREF B : INTEGER, C : INTEGER",
+            "BYVAL A : INTEGER, B : INTEGER, BYREF C : INTEGER",
+        ] {
+            run_case(
+                parameters,
+                &format!("FUNCTION F({parameters}) RETURNS INTEGER\nRETURN 1\nENDFUNCTION\n"),
+                "",
+                "",
+                Some("Parameters should not be passed by reference to a function"),
+                &[],
+            );
+        }
+    }
+
+    #[test]
+    fn web_replay_preserves_mixed_modes_across_input() {
+        let source = "PROCEDURE Change(BYREF A : INTEGER, B : INTEGER, BYVAL C : INTEGER, D : INTEGER)\nA <- A + 10\nB <- B + 20\nINPUT C\nD <- D + C\nOUTPUT A, \":\", B, \":\", C, \":\", D\nENDPROCEDURE\nDECLARE X : INTEGER\nDECLARE Y : INTEGER\nDECLARE Z : INTEGER\nDECLARE W : INTEGER\nX <- 1\nY <- 2\nZ <- 3\nW <- 4\nCALL Change(X, Y, Z, W)\nOUTPUT X, \":\", Y, \":\", Z, \":\", W\n";
+        let mut runner = StepInterpreter::new(source).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(runner.step(), StepEvent::NeedsInput { variable } if variable == "C"));
+        }
+        runner.supply_input("5".to_owned());
+        for expected in ["11:22:5:9", "11:22:3:4"] {
+            match runner.step() {
+                StepEvent::Output { value } => assert_eq!(value, expected),
+                other => panic!("expected {expected:?}, got {other:?}"),
+            }
+        }
+        assert!(matches!(runner.step(), StepEvent::Done));
+    }
+}
+mod grouped_parameters {
+    use super::*;
+
+    case!(
+        function_names_share_type_and_keep_order,
+        "grouped function parameters default to BYVAL",
+        r#"
+FUNCTION Digits(A, B, C, D : INTEGER) RETURNS INTEGER
+A <- A + 1
+RETURN A * 1000 + B * 100 + C * 10 + D
+ENDFUNCTION
+DECLARE X : INTEGER
+X <- 1
+OUTPUT Digits(X, 2, 3, 4)
+OUTPUT X
+"#,
+        "2234\n1\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        procedure_groups_inherit_and_switch_modes,
+        "grouped types preserve passing mode inheritance",
+        r#"
+PROCEDURE Change(A, B : INTEGER, BYREF C, D : INTEGER,
+BYVAL E, F : INTEGER, BYREF G, H : INTEGER)
+A <- 1
+B <- 2
+C <- 3
+D <- 4
+E <- 5
+F <- 6
+G <- 7
+H <- 8
+ENDPROCEDURE
+DECLARE A, B, C, D, E, F, G, H : INTEGER
+CALL Change(A, B, C, D, E, F, G, H)
+OUTPUT A, B, C, D, E, F, G, H
+"#,
+        "00340078\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        passing_modes_carry_across_type_groups,
+        "passing mode persists after each grouped type",
+        r#"
+PROCEDURE Change(BYREF A, B : INTEGER, C, D : STRING)
+A <- 1
+B <- 2
+C <- "three"
+D <- "four"
+ENDPROCEDURE
+DECLARE X, Y : INTEGER
+DECLARE S, T : STRING
+CALL Change(X, Y, S, T)
+OUTPUT X, ":", Y, ":", S, ":", T
+"#,
+        "1:2:three:four\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        mode_switch_within_a_type_group,
+        "each grouped name keeps its own passing mode",
+        r#"
+PROCEDURE Change(BYREF A, BYVAL B, C, BYREF D, E : INTEGER)
+A <- 1
+B <- 2
+C <- 3
+D <- 4
+E <- 5
+ENDPROCEDURE
+DECLARE V, W, X, Y, Z : INTEGER
+CALL Change(V, W, X, Y, Z)
+OUTPUT V, W, X, Y, Z
+"#,
+        "10045\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        mixed_grouped_and_individual_types,
+        "grouped names work alongside individually typed parameters",
+        r#"
+TYPE Season = (Spring, Summer)
+FUNCTION Describe(A, B : STRING, C : INTEGER, BYVAL D, E : Season) RETURNS STRING
+D <- Summer
+RETURN A & B & NUM_TO_STR(C) & D & E
+ENDFUNCTION
+OUTPUT Describe("a", "b", 3, Spring, Spring)
+"#,
+        "ab3SummerSpring\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        grouped_array_parameters,
+        "grouped array parameters preserve copy and reference semantics",
+        r#"
+PROCEDURE Change(BYREF A, B : ARRAY[1:2] OF INTEGER, BYVAL C, D : ARRAY[1:2] OF INTEGER)
+A[1] <- 10
+B[2] <- 20
+C[1] <- 30
+D[2] <- 40
+OUTPUT C[1], ":", C[2], ":", D[1], ":", D[2]
+ENDPROCEDURE
+DECLARE V : ARRAY[1:2] OF INTEGER
+V[1] <- 1
+V[2] <- 2
+CALL Change(V, V, V, V)
+OUTPUT V[1], ":", V[2]
+"#,
+        "30:2:1:40\n10:20\n",
+        "",
+        None,
+        &[]
+    );
+
+    #[test]
+    fn every_grouped_name_has_the_declared_type() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            for index in 0..4 {
+                let mut arguments = ["1", "2", "3", "4"];
+                arguments[index] = "TRUE";
+                let source = if kind == "PROCEDURE" {
+                    format!(
+                        "PROCEDURE P(A, B, C, D : INTEGER)\nENDPROCEDURE\nCALL P({})\n",
+                        arguments.join(", ")
+                    )
+                } else {
+                    format!("FUNCTION F(A, B, C, D : INTEGER) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\nOUTPUT F({})\n", arguments.join(", "))
+                };
+                let name = ["A", "B", "C", "D"][index];
+                run_case(
+                    &format!("{kind} parameter {name}"),
+                    &source,
+                    "",
+                    "",
+                    Some(&format!("Type mismatch for parameter '{name}'")),
+                    &[],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_parameter_groups_are_rejected() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            for (parameters, message) in [
+                ("A, A : INTEGER", "2 parameters with the same name"),
+                ("A, a : INTEGER", "2 parameters with the same name"),
+                (
+                    "A, B : INTEGER, C, a : STRING",
+                    "2 parameters with the same name",
+                ),
+                ("A, B", "Expected ':'"),
+                ("A,", "Expected parameter name"),
+                ("A, : INTEGER", "Expected parameter name"),
+                ("A,, B : INTEGER", "Expected parameter name"),
+                (", A : INTEGER", "Expected parameter name"),
+                ("A, OUTPUT : INTEGER", "Expected parameter name"),
+            ] {
+                let source = if kind == "PROCEDURE" {
+                    format!("PROCEDURE P({parameters})\nENDPROCEDURE\n")
+                } else {
+                    format!("FUNCTION F({parameters}) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\n")
+                };
+                run_case(
+                    &format!("{kind}({parameters})"),
+                    &source,
+                    "",
+                    "",
+                    Some(message),
+                    &[],
+                );
+            }
+        }
+    }
+
+    case!(
+        grouped_function_still_rejects_byref,
+        "grouped function parameters cannot switch to BYREF",
+        "FUNCTION F(A, BYREF B, C : INTEGER) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\n",
+        "",
+        "",
+        Some("Parameters should not be passed by reference to a function"),
+        &[]
+    );
+}
+mod grouped_parameter_coverage {
+    use super::*;
+    use cambridge_pseudocode_interpreter::Inter::step_interpreter::{StepEvent, StepInterpreter};
+
+    fn expect_outputs(source: &str, expected: &[&str]) {
+        let mut runner =
+            StepInterpreter::new(source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+        for expected in expected {
+            match runner.step() {
+                StepEvent::Output { value } => assert_eq!(value, *expected, "{source}"),
+                other => panic!("expected {expected:?}, got {other:?}\n{source}"),
+            }
+        }
+        assert!(matches!(runner.step(), StepEvent::Done), "{source}");
+    }
+
+    fn signature(markers: &[&str], boundaries: usize) -> String {
+        markers
+            .iter()
+            .enumerate()
+            .map(|(i, marker)| {
+                let type_ = if i == markers.len() - 1 || boundaries & (1 << i) != 0 {
+                    " : INTEGER"
+                } else {
+                    ""
+                };
+                format!("{marker} P{i}{type_}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    #[test]
+    fn procedures_all_group_boundaries_and_passing_modes() {
+        for pattern in 0..243 {
+            let mut digits = pattern;
+            let markers: Vec<_> = (0..5)
+                .map(|_| {
+                    let marker = ["", "BYVAL", "BYREF"][digits % 3];
+                    digits /= 3;
+                    marker
+                })
+                .collect();
+            let expected = (0..5)
+                .map(|i| {
+                    let byref =
+                        markers[..=i].iter().rfind(|marker| !marker.is_empty()) == Some(&"BYREF");
+                    if byref {
+                        (i + 11).to_string()
+                    } else {
+                        (i + 1).to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(":");
+            for boundaries in 0..16 {
+                let parameters = signature(&markers, boundaries);
+                let source = format!("PROCEDURE P({parameters})\nP0 <- P0 + 10\nP1 <- P1 + 10\nP2 <- P2 + 10\nP3 <- P3 + 10\nP4 <- P4 + 10\nOUTPUT P0, \":\", P1, \":\", P2, \":\", P3, \":\", P4\nENDPROCEDURE\nDECLARE A, B, C, D, E : INTEGER\nA <- 1\nB <- 2\nC <- 3\nD <- 4\nE <- 5\nCALL P(A, B, C, D, E)\nOUTPUT A, \":\", B, \":\", C, \":\", D, \":\", E\n");
+                expect_outputs(&source, &["11:12:13:14:15", &expected]);
+            }
+        }
+    }
+
+    #[test]
+    fn functions_all_group_boundaries_and_byval_markers() {
+        for pattern in 0..32 {
+            let markers: Vec<_> = (0..5)
+                .map(|i| if pattern & (1 << i) != 0 { "BYVAL" } else { "" })
+                .collect();
+            for boundaries in 0..16 {
+                let parameters = signature(&markers, boundaries);
+                let source = format!("FUNCTION F({parameters}) RETURNS INTEGER\nP0 <- P0 + 1\nP1 <- P1 + 1\nP2 <- P2 + 1\nP3 <- P3 + 1\nP4 <- P4 + 1\nRETURN P0 * 10000 + P1 * 1000 + P2 * 100 + P3 * 10 + P4\nENDFUNCTION\nDECLARE A, B, C, D, E : INTEGER\nA <- 1\nB <- 2\nC <- 3\nD <- 4\nE <- 5\nOUTPUT F(A, B, C, D, E)\nOUTPUT A, B, C, D, E\n");
+                expect_outputs(&source, &["23456", "12345"]);
+            }
+        }
+    }
+
+    #[test]
+    fn every_scalar_and_enum_group_preserves_passing_modes() {
+        for (type_, initial, changed, old_output, new_output) in [
+            ("INTEGER", "1", "2", "1", "2"),
+            ("REAL", "1.25", "2.75", "1.25", "2.75"),
+            ("STRING", "\"old\"", "\"new\"", "old", "new"),
+            ("CHAR", "'a'", "'z'", "a", "z"),
+            ("BOOLEAN", "FALSE", "TRUE", "FALSE", "TRUE"),
+            (
+                "DATE",
+                "01/01/2024",
+                "29/02/2024",
+                "01/01/2024",
+                "29/02/2024",
+            ),
+            ("Season", "Spring", "Summer", "Spring", "Summer"),
+        ] {
+            let source = format!("TYPE Season = (Spring, Summer)\nPROCEDURE Change(BYREF A, B : {type_}, BYVAL C, D : {type_})\nA <- {changed}\nB <- {changed}\nC <- {changed}\nD <- {changed}\nOUTPUT A, \":\", B, \":\", C, \":\", D\nENDPROCEDURE\nDECLARE W, X, Y, Z : {type_}\nW <- {initial}\nX <- {initial}\nY <- {initial}\nZ <- {initial}\nCALL Change(W, X, Y, Z)\nOUTPUT W, \":\", X, \":\", Y, \":\", Z\n");
+            expect_outputs(
+                &source,
+                &[
+                    &[new_output; 4].join(":"),
+                    &format!("{new_output}:{new_output}:{old_output}:{old_output}"),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn wrong_types_are_rejected_in_every_group_position() {
+        for (type_, value, wrong) in [
+            ("INTEGER", "1", "TRUE"),
+            ("REAL", "1.25", "TRUE"),
+            ("STRING", "\"a\"", "TRUE"),
+            ("CHAR", "'a'", "\"a\""),
+            ("BOOLEAN", "TRUE", "1"),
+            ("DATE", "01/01/2024", "\"01/01/2024\""),
+            ("Season", "Spring", "OtherSpring"),
+        ] {
+            for kind in ["PROCEDURE", "FUNCTION"] {
+                for position in 0..4 {
+                    let mut args = [value; 4];
+                    args[position] = wrong;
+                    let args = args.join(", ");
+                    let header = "TYPE Season = (Spring, Summer)\nTYPE OtherSeason = (OtherSpring, OtherSummer)\n";
+                    let source = if kind == "PROCEDURE" {
+                        format!("{header}PROCEDURE P(A, B, C, D : {type_})\nENDPROCEDURE\nCALL P({args})\n")
+                    } else {
+                        format!("{header}FUNCTION F(A, B, C, D : {type_}) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\nOUTPUT F({args})\n")
+                    };
+                    run_case(
+                        &format!("{kind} {type_} argument {position}"),
+                        &source,
+                        "",
+                        "",
+                        Some(&format!(
+                            "Type mismatch for parameter '{}'",
+                            ["A", "B", "C", "D"][position]
+                        )),
+                        &[],
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arity_counts_names_not_type_groups() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            for count in [0, 1, 2, 3, 5, 8] {
+                let args = vec!["1"; count].join(", ");
+                let source = if kind == "PROCEDURE" {
+                    format!("PROCEDURE P(A, B : INTEGER, C, D : INTEGER)\nENDPROCEDURE\nCALL P({args})\n")
+                } else {
+                    format!("FUNCTION F(A, B : INTEGER, C, D : INTEGER) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\nOUTPUT F({args})\n")
+                };
+                run_case(
+                    kind,
+                    &source,
+                    "",
+                    "",
+                    Some(&format!("expected 4 arguments, got {count}")),
+                    &[],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn byref_requires_variables_at_every_grouped_position() {
+        for position in 0..4 {
+            for invalid in ["1", "X + 1", "GetNumber()", "Fixed"] {
+                let mut args = ["X"; 4];
+                args[position] = invalid;
+                let source = format!("CONSTANT Fixed = 1\nFUNCTION GetNumber() RETURNS INTEGER\nRETURN 1\nENDFUNCTION\nPROCEDURE P(BYREF A, B, C, D : INTEGER)\nENDPROCEDURE\nDECLARE X : INTEGER\nCALL P({})\n", args.join(", "));
+                run_case(invalid, &source, "", "", Some("BYREF"), &[]);
+            }
+        }
+    }
+
+    #[test]
+    fn byref_checks_exact_type_at_every_grouped_position() {
+        for position in 0..4 {
+            let mut args = ["X"; 4];
+            args[position] = "Y";
+            let source = format!("PROCEDURE P(BYREF A, B, C, D : INTEGER)\nENDPROCEDURE\nDECLARE X : INTEGER\nDECLARE Y : REAL\nY <- 1\nCALL P({})\n", args.join(", "));
+            run_case(
+                "grouped BYREF exact types",
+                &source,
+                "",
+                "",
+                Some(&format!(
+                    "Type mismatch for BYREF parameter '{}'",
+                    ["A", "B", "C", "D"][position]
+                )),
+                &[],
+            );
+        }
+    }
+
+    case!(
+        two_dimensional_arrays_keep_bounds_and_copies,
+        "commas in 2D types do not split parameter groups",
+        r#"
+PROCEDURE P(BYREF A, B : ARRAY[2:3,4:5] OF INTEGER, BYVAL C, D : ARRAY[2:3,4:5] OF INTEGER)
+A[2,4] <- 10
+B[3,5] <- 20
+C[2,4] <- 30
+D[3,5] <- 40
+OUTPUT C[2,4], ":", C[3,5], ":", D[2,4], ":", D[3,5]
+ENDPROCEDURE
+DECLARE V : ARRAY[2:3,4:5] OF INTEGER
+V[2,4] <- 1
+V[3,5] <- 2
+CALL P(V, V, V, V)
+OUTPUT V[2,4], ":", V[3,5]
+"#,
+        "30:2:1:40\n10:20\n",
+        "",
+        None,
+        &[]
+    );
+
+    #[test]
+    fn grouped_arrays_validate_every_arguments_shape() {
+        for mode in ["BYVAL", "BYREF"] {
+            for wrong_type in [
+                "ARRAY[1:3] OF INTEGER",
+                "ARRAY[1:2,1:2] OF INTEGER",
+                "ARRAY[1:2] OF STRING",
+            ] {
+                for position in 0..3 {
+                    let mut args = ["V"; 3];
+                    args[position] = "W";
+                    let source = format!("PROCEDURE P({mode} A, B, C : ARRAY[1:2] OF INTEGER)\nENDPROCEDURE\nDECLARE V : ARRAY[1:2] OF INTEGER\nDECLARE W : {wrong_type}\nCALL P({})\n", args.join(", "));
+                    run_case(
+                        &format!("{mode} {wrong_type} at {position}"),
+                        &source,
+                        "",
+                        "",
+                        Some("Type mismatch"),
+                        &[],
+                    );
+                }
+            }
+        }
+    }
+
+    case!(
+        nested_calls_and_recursive_grouped_parameters,
+        "grouped parameters remain separate across recursive frames",
+        r#"
+PROCEDURE Add(BYREF A, B : INTEGER)
+A <- A + 1
+B <- B + 2
+ENDPROCEDURE
+PROCEDURE Recur(BYREF A, B : INTEGER, BYVAL N, Step : INTEGER)
+IF N > 0 THEN
+CALL Add(A, B)
+CALL Recur(A, B, N - Step, Step)
+ENDIF
+ENDPROCEDURE
+DECLARE X, Y, N, S : INTEGER
+N <- 3
+S <- 1
+CALL Recur(X, Y, N, S)
+OUTPUT X, ":", Y, ":", N, ":", S
+"#,
+        "3:6:3:1\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        grouped_function_arguments_evaluated_once_in_order,
+        "each grouped actual argument is evaluated once in order",
+        r#"
+DECLARE Count : INTEGER
+FUNCTION Next() RETURNS INTEGER
+Count <- Count + 1
+RETURN Count
+ENDFUNCTION
+FUNCTION Digits(A, B, C, D : INTEGER) RETURNS INTEGER
+RETURN A * 1000 + B * 100 + C * 10 + D
+ENDFUNCTION
+OUTPUT Digits(Next(), Next(), Next(), Next())
+OUTPUT Count
+"#,
+        "1234\n4\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        grouped_modes_reset_for_next_declaration,
+        "type groups and passing modes do not leak between declarations",
+        r#"
+PROCEDURE P(BYREF A, B : INTEGER)
+A <- 10
+B <- 20
+ENDPROCEDURE
+PROCEDURE Q(A, B : INTEGER)
+A <- 30
+B <- 40
+ENDPROCEDURE
+FUNCTION F(A, B : INTEGER) RETURNS INTEGER
+A <- 50
+B <- 60
+RETURN A + B
+ENDFUNCTION
+DECLARE X, Y : INTEGER
+CALL P(X, Y)
+CALL Q(X, Y)
+OUTPUT F(X, Y)
+OUTPUT X, ":", Y
+"#,
+        "110\n10:20\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        comments_and_line_breaks_inside_groups,
+        "grouped parameters allow whitespace and comments",
+        r#"
+FUNCTION F(
+BYVAL A, // first name
+B // second name
+: INTEGER,
+C,
+D : STRING
+) RETURNS STRING
+RETURN NUM_TO_STR(A + B) & C & D
+ENDFUNCTION
+OUTPUT F(1, 2, "x", "y")
+"#,
+        "3xy\n",
+        "",
+        None,
+        &[]
+    );
+
+    #[test]
+    fn long_groups_keep_all_parameter_names_and_order() {
+        let names: Vec<_> = (0..64).map(|i| format!("P{i}")).collect();
+        let args: Vec<_> = (0..64).map(|i| i.to_string()).collect();
+        let body = names
+            .iter()
+            .map(|name| format!("OUTPUT {name}\n"))
+            .collect::<String>();
+        let source = format!(
+            "PROCEDURE P({} : INTEGER)\n{body}ENDPROCEDURE\nCALL P({})\n",
+            names.join(", "),
+            args.join(", ")
+        );
+        run_case(
+            "64 grouped parameters",
+            &source,
+            &(args.join("\n") + "\n"),
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn duplicate_names_rejected_across_every_pair_of_groups() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            for first in 0..6 {
+                for second in first + 1..6 {
+                    let mut names: Vec<_> = (0..6).map(|i| format!("P{i}")).collect();
+                    names[second] = names[first].to_lowercase();
+                    let params = format!(
+                        "{}, {} : INTEGER, {}, {} : STRING, {}, {} : BOOLEAN",
+                        names[0], names[1], names[2], names[3], names[4], names[5]
+                    );
+                    let source = if kind == "PROCEDURE" {
+                        format!("PROCEDURE P({params})\nENDPROCEDURE\n")
+                    } else {
+                        format!("FUNCTION F({params}) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\n")
+                    };
+                    run_case(
+                        &params,
+                        &source,
+                        "",
+                        "",
+                        Some("2 parameters with the same name"),
+                        &[],
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn functions_reject_byref_in_all_group_positions() {
+        for position in 0..5 {
+            for boundaries in 0..16 {
+                let mut markers = [""; 5];
+                markers[position] = "BYREF";
+                let params = signature(&markers, boundaries);
+                let source =
+                    format!("FUNCTION F({params}) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\n");
+                let error = match StepInterpreter::new(&source) {
+                    Ok(_) => panic!("accepted {source}"),
+                    Err(error) => error,
+                };
+                assert!(
+                    error.contains("Parameters should not be passed by reference to a function"),
+                    "{error}\n{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_groups_fail_without_panicking() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            for params in [
+                "A, B :",
+                "A, B : INTEGER, C, D",
+                "A, B : INTEGER, C,",
+                "A, B : INTEGER,, C : STRING",
+                "BYVAL",
+                "BYVAL A, BYVAL : INTEGER",
+                "A B : INTEGER",
+                "A, B : INTEGER C, D : STRING",
+                "A, B :: INTEGER",
+                "A, B : ARRAY[1:2,] OF INTEGER",
+            ] {
+                let source = if kind == "PROCEDURE" {
+                    format!("PROCEDURE P({params})\nENDPROCEDURE\n")
+                } else {
+                    format!("FUNCTION F({params}) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\n")
+                };
+                run_case(
+                    &format!("{kind}({params})"),
+                    &source,
+                    "",
+                    "",
+                    Some("Syntax Error"),
+                    &[],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_groups_fail_without_panicking_or_hanging() {
+        for source in [
+            "PROCEDURE P(A,",
+            "PROCEDURE P(A, B :",
+            "FUNCTION F(A,",
+            "FUNCTION F(A, B :",
+            "PROCEDURE P(A, B : INTEGER, C,",
+        ] {
+            run_case(source, source, "", "", Some("Syntax Error"), &[]);
+        }
+    }
+
+    case!(
+        reject_procedure_trailing_comma_after_typed_group,
+        "procedure parameter list must not end in a comma",
+        "PROCEDURE P(A, B : INTEGER,)\nENDPROCEDURE\n",
+        "",
+        "",
+        Some("Syntax Error"),
+        &[]
+    );
+
+    case!(
+        reject_function_trailing_comma_after_typed_group,
+        "function parameter list must not end in a comma",
+        "FUNCTION F(A, B : INTEGER,) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\n",
+        "",
+        "",
+        Some("Syntax Error"),
+        &[]
+    );
+
+    #[test]
+    fn grouped_input_targets_preserve_modes_during_replay() {
+        let source = "PROCEDURE P(BYREF A, B : INTEGER, BYVAL C, D : INTEGER)\nINPUT A\nINPUT B\nINPUT C\nINPUT D\nOUTPUT A, \":\", B, \":\", C, \":\", D\nENDPROCEDURE\nDECLARE X, Y, Z, W : INTEGER\nCALL P(X, Y, Z, W)\nOUTPUT X, \":\", Y, \":\", Z, \":\", W\n";
+        let mut runner = StepInterpreter::new(source).unwrap();
+        for (name, value) in [("A", "1"), ("B", "2"), ("C", "3"), ("D", "4")] {
+            for _ in 0..2 {
+                assert!(
+                    matches!(runner.step(), StepEvent::NeedsInput { variable } if variable == name)
+                );
+            }
+            runner.supply_input(value.to_owned());
+        }
+        for expected in ["1:2:3:4", "1:2:0:0"] {
+            assert!(matches!(runner.step(), StepEvent::Output { value } if value == expected));
+        }
+        assert!(matches!(runner.step(), StepEvent::Done));
+    }
+}
+mod grouped_parameter_edges {
+    use super::*;
+    use cambridge_pseudocode_interpreter::{
+        errortype::{CPSError, ErrorType},
+        Inter::{
+            cps::Type,
+            step_interpreter::{StepEvent, StepInterpreter},
+        },
+        Lexer::lexer::Lexer,
+        Parser::{
+            ast::{Ast, PassingValue, Stmt},
+            parser::Parser,
+        },
+    };
+
+    fn parse(source: &str) -> Result<Vec<Ast>, CPSError> {
+        let tokens = Lexer::new(source.to_owned()).tokenize()?;
+        Parser::new(tokens, source.to_owned()).parse_statements()
+    }
+
+    fn outputs(source: &str, expected: &[String]) {
+        let mut runner =
+            StepInterpreter::new(source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+        for expected in expected {
+            match runner.step() {
+                StepEvent::Output { value } => assert_eq!(&value, expected, "{source}"),
+                other => panic!("expected {expected:?}, got {other:?}\n{source}"),
+            }
+        }
+        assert!(matches!(runner.step(), StepEvent::Done), "{source}");
+    }
+
+    #[test]
+    fn all_three_type_group_combinations_keep_names_types_and_modes() {
+        let types = [
+            ("INTEGER", Type::Integer),
+            ("REAL", Type::Real),
+            ("STRING", Type::String),
+            ("CHAR", Type::Char),
+            ("BOOLEAN", Type::Boolean),
+            ("DATE", Type::Date),
+            ("Season", Type::Named("Season".to_owned())),
+        ];
+        for function in [false, true] {
+            for (a, first) in &types {
+                for (b, second) in &types {
+                    for (c, third) in &types {
+                        let (source, modes) = if function {
+                            (format!("FUNCTION F(A, B, C : {a}, BYVAL D, E : {b}, F : {c}) RETURNS BOOLEAN\nRETURN TRUE\nENDFUNCTION\n"), [PassingValue::ByVal; 6])
+                        } else {
+                            (format!("PROCEDURE P(BYREF A, B, C : {a}, BYVAL D, E : {b}, BYREF F : {c})\nOUTPUT 1\nENDPROCEDURE\n"), [PassingValue::ByRef, PassingValue::ByRef, PassingValue::ByRef, PassingValue::ByVal, PassingValue::ByVal, PassingValue::ByRef])
+                        };
+                        let ast = parse(&source).unwrap();
+                        assert_eq!(ast.len(), 1);
+                        let statement = match &ast[0] {
+                            Ast::Stmt(Stmt::At { inner, .. }) => inner.as_ref(),
+                            other => panic!("{other:?}"),
+                        };
+                        let parameters = match statement {
+                            Stmt::Function {
+                                parameters,
+                                return_type,
+                                body,
+                                ..
+                            } => {
+                                assert_eq!(*return_type, Type::Boolean);
+                                assert_eq!(body.statements.len(), 1);
+                                parameters
+                            }
+                            Stmt::Procedure {
+                                parameters, body, ..
+                            } => {
+                                assert_eq!(body.statements.len(), 1);
+                                parameters
+                            }
+                            other => panic!("{other:?}"),
+                        };
+                        let expected: Vec<_> = ["A", "B", "C", "D", "E", "F"]
+                            .iter()
+                            .zip([first, first, first, second, second, third])
+                            .zip(modes)
+                            .map(|((name, ty), mode)| ((*name).to_owned(), ty.clone(), mode))
+                            .collect();
+                        assert_eq!(*parameters, expected, "{source}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_shared_argument_partition_and_copy_mode() {
+        for pattern in 0..256 {
+            let slots = [
+                pattern % 4,
+                (pattern / 4) % 4,
+                (pattern / 16) % 4,
+                (pattern / 64) % 4,
+            ];
+            if slots[0] != 0 || (1..4).any(|i| slots[i] > 1 + slots[..i].iter().max().unwrap()) {
+                continue;
+            }
+            for modes in 0..16 {
+                let mut caller = [1, 2, 3, 4];
+                let mut copies = slots.map(|slot| caller[slot]);
+                for i in 0..4 {
+                    if modes & (1 << i) != 0 {
+                        caller[slots[i]] += 10 + i;
+                    } else {
+                        copies[i] += 10 + i;
+                    }
+                }
+                let inside = (0..4)
+                    .map(|i| {
+                        if modes & (1 << i) != 0 {
+                            caller[slots[i]]
+                        } else {
+                            copies[i]
+                        }
+                    })
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join(":");
+                let after = caller
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join(":");
+                let parameters = (0..4)
+                    .map(|i| {
+                        format!(
+                            "{} P{i}",
+                            if modes & (1 << i) != 0 {
+                                "BYREF"
+                            } else {
+                                "BYVAL"
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let arguments = slots.map(|slot| format!("V{slot}")).join(", ");
+                let source = format!("PROCEDURE P({parameters} : INTEGER)\nP0 <- P0 + 10\nP1 <- P1 + 11\nP2 <- P2 + 12\nP3 <- P3 + 13\nOUTPUT P0, \":\", P1, \":\", P2, \":\", P3\nENDPROCEDURE\nDECLARE V0, V1, V2, V3 : INTEGER\nV0 <- 1\nV1 <- 2\nV2 <- 3\nV3 <- 4\nCALL P({arguments})\nOUTPUT V0, \":\", V1, \":\", V2, \":\", V3\n");
+                outputs(&source, &[inside, after]);
+            }
+        }
+    }
+
+    case!(
+        whole_array_assignment_keeps_references_and_copies,
+        "whole array writes preserve grouped parameter storage",
+        r#"
+PROCEDURE P(BYREF A, B : ARRAY[1:2] OF INTEGER, BYVAL C, D : ARRAY[1:2] OF INTEGER)
+DECLARE Replacement : ARRAY[1:2] OF INTEGER
+Replacement[1] <- 7
+Replacement[2] <- 8
+A <- Replacement
+OUTPUT B[1], ":", B[2], ":", C[1], ":", C[2]
+C <- Replacement
+C[1] <- 99
+OUTPUT A[1], ":", C[1], ":", D[1]
+ENDPROCEDURE
+DECLARE V : ARRAY[1:2] OF INTEGER
+V[1] <- 1
+V[2] <- 2
+CALL P(V, V, V, V)
+OUTPUT V[1], ":", V[2]
+"#,
+        "7:8:1:2\n7:99:1\n7:8\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        array_of_enums_keeps_grouped_copies_independent,
+        "enum array groups preserve base types and isolation",
+        r#"
+TYPE Season = (Spring, Summer, Winter)
+PROCEDURE P(BYREF A, B : ARRAY[3:4] OF Season, BYVAL C, D : ARRAY[3:4] OF Season)
+A[3] <- Summer
+B[4] <- Winter
+C[3] <- Winter
+D[4] <- Summer
+OUTPUT C[3], ":", C[4], ":", D[3], ":", D[4]
+ENDPROCEDURE
+DECLARE V : ARRAY[3:4] OF Season
+V[3] <- Spring
+V[4] <- Spring
+CALL P(V, V, V, V)
+OUTPUT V[3], ":", V[4]
+"#,
+        "Winter:Spring:Spring:Summer\nSummer:Winter\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        grouped_function_can_return_an_array_copy,
+        "grouped function parameters remain independent of the returned array",
+        r#"
+FUNCTION F(A, B : ARRAY[1:2] OF INTEGER) RETURNS ARRAY[1:2] OF INTEGER
+A[1] <- 9
+OUTPUT B[1], ":", B[2]
+RETURN A
+ENDFUNCTION
+DECLARE V, R : ARRAY[1:2] OF INTEGER
+V[1] <- 1
+V[2] <- 2
+R <- F(V, V)
+R[2] <- 8
+OUTPUT V[1], ":", V[2], ":", R[1], ":", R[2]
+"#,
+        "1:2\n1:2:9:8\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        recursive_byval_arrays_are_isolated_per_frame,
+        "recursive calls copy grouped arrays at each level",
+        r#"
+FUNCTION F(A, B : ARRAY[1:1] OF INTEGER, N : INTEGER) RETURNS INTEGER
+IF N = 0 THEN
+RETURN A[1] + B[1]
+ENDIF
+A[1] <- A[1] + N
+RETURN F(A, B, N - 1) + A[1]
+ENDFUNCTION
+DECLARE V : ARRAY[1:1] OF INTEGER
+V[1] <- 1
+OUTPUT F(V, V, 2)
+OUTPUT V[1]
+"#,
+        "12\n1\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        grouped_parameter_names_shadow_globals,
+        "parameter names do not overwrite unrelated globals",
+        r#"
+DECLARE A, B, X, Y : INTEGER
+A <- 100
+B <- 200
+X <- 1
+Y <- 2
+PROCEDURE P(BYREF A, B : INTEGER)
+A <- A + 10
+B <- B + 20
+ENDPROCEDURE
+CALL P(X, Y)
+OUTPUT A, ":", B, ":", X, ":", Y
+"#,
+        "100:200:11:22\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        byref_and_byval_bind_in_argument_evaluation_order,
+        "grouped references remain live while later arguments have side effects",
+        r#"
+DECLARE X : INTEGER
+X <- 1
+FUNCTION Change() RETURNS INTEGER
+X <- 9
+RETURN X
+ENDFUNCTION
+PROCEDURE P(BYREF A, BYVAL B, C : INTEGER)
+OUTPUT A, ":", B, ":", C
+ENDPROCEDURE
+CALL P(X, X, Change())
+OUTPUT X
+"#,
+        "9:1:9\n9\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        byval_numeric_conversion_applies_to_each_grouped_name,
+        "all grouped REAL parameters accept INTEGER copies",
+        r#"
+PROCEDURE P(A, B, C : REAL)
+A <- A + 0.5
+B <- B + 0.25
+C <- C + 0.75
+OUTPUT A, ":", B, ":", C
+ENDPROCEDURE
+DECLARE X, Y, Z : INTEGER
+X <- 1
+Y <- 2
+Z <- 3
+CALL P(X, Y, Z)
+OUTPUT X, ":", Y, ":", Z
+"#,
+        "1.5:2.25:3.75\n1:2:3\n",
+        "",
+        None,
+        &[]
+    );
+
+    #[test]
+    fn same_length_arrays_with_different_bounds_are_rejected() {
+        for mode in ["BYVAL", "BYREF"] {
+            for position in 0..3 {
+                let mut args = ["V"; 3];
+                args[position] = "Wrong";
+                let source = format!("PROCEDURE P({mode} A, B, C : ARRAY[2:3,4:5] OF INTEGER)\nENDPROCEDURE\nDECLARE V : ARRAY[2:3,4:5] OF INTEGER\nDECLARE Wrong : ARRAY[1:2,4:5] OF INTEGER\nCALL P({})\n", args.join(", "));
+                run_case(
+                    "grouped arrays require identical bounds",
+                    &source,
+                    "",
+                    "",
+                    Some("Type mismatch"),
+                    &[],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_type_in_any_group_rejects_the_definition() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            for position in 0..3 {
+                let mut types = ["INTEGER"; 3];
+                types[position] = "MissingType";
+                let params = format!(
+                    "A, B : {}, C, D : {}, E, F : {}",
+                    types[0], types[1], types[2]
+                );
+                let source = if kind == "PROCEDURE" {
+                    format!("PROCEDURE P({params})\nENDPROCEDURE\n")
+                } else {
+                    format!("FUNCTION F({params}) RETURNS INTEGER\nRETURN 0\nENDFUNCTION\n")
+                };
+                run_case(kind, &source, "", "", Some("has not been defined"), &[]);
+            }
+        }
+    }
+
+    #[test]
+    fn zero_and_single_parameter_declarations_still_work_after_groups() {
+        let source = "PROCEDURE P(BYREF A, B : INTEGER)\nENDPROCEDURE\nPROCEDURE Q()\nOUTPUT 7\nENDPROCEDURE\nFUNCTION F(A : INTEGER) RETURNS INTEGER\nRETURN A\nENDFUNCTION\nFUNCTION G() RETURNS INTEGER\nRETURN 9\nENDFUNCTION\nCALL Q()\nOUTPUT F(8)\nOUTPUT G()\n";
+        outputs(source, &["7".to_owned(), "8".to_owned(), "9".to_owned()]);
+    }
+
+    #[test]
+    fn duplicate_parameter_error_points_to_repeated_name() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            let suffix = if kind == "PROCEDURE" {
+                "ENDPROCEDURE\n"
+            } else {
+                "RETURN 0\nENDFUNCTION\n"
+            };
+            let returns = if kind == "FUNCTION" {
+                " RETURNS INTEGER"
+            } else {
+                ""
+            };
+            let source = format!(
+                "{kind} P(First, Second : INTEGER,\n    Third, fIrSt : STRING){returns}\n{suffix}"
+            );
+            let error = parse(&source).expect_err("duplicate name must be rejected");
+            assert!(matches!(error.error_type, ErrorType::Syntax));
+            assert!(error.message.contains("fIrSt"), "{error:?}");
+            assert_eq!((error.line, error.column), (2, 12));
+            assert_eq!(error.source.as_deref(), Some(source.as_str()));
+        }
+    }
+
+    #[test]
+    fn trailing_comma_diagnostic_points_to_the_comma() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            let source = format!(
+                "{kind} P(A, B : INTEGER,\n C, D : STRING,\n){}\nEND{kind}\n",
+                if kind == "FUNCTION" {
+                    " RETURNS INTEGER"
+                } else {
+                    ""
+                }
+            );
+            let error = parse(&source).expect_err("trailing comma must be rejected");
+            assert!(matches!(error.error_type, ErrorType::Syntax));
+            assert!(error.message.contains("Trailing comma"), "{error:?}");
+            assert_eq!((error.line, error.column), (2, 15));
+            assert_eq!(error.source.as_deref(), Some(source.as_str()));
+        }
+    }
+
+    #[test]
+    fn doubled_or_dangling_passing_markers_are_rejected() {
+        for params in [
+            "BYVAL BYVAL A, B : INTEGER",
+            "BYREF BYVAL A, B : INTEGER",
+            "A, BYREF BYREF B : INTEGER",
+            "A, BYVAL BYREF B : INTEGER",
+            "A, B : INTEGER, BYVAL",
+            "A, B : INTEGER, BYREF",
+            "A, BYREF : INTEGER",
+        ] {
+            let source = format!("PROCEDURE P({params})\nENDPROCEDURE\n");
+            run_case(
+                params,
+                &source,
+                "",
+                "",
+                Some("Expected parameter name"),
+                &[],
+            );
+        }
+    }
+
+    #[test]
+    fn every_token_boundary_in_an_incomplete_header_is_rejected() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            let header = format!(
+                "{kind} P ( BYVAL A , B : ARRAY [ 1 : 2 , 3 : 4 ] OF INTEGER , C , D : STRING"
+            );
+            let tokens: Vec<_> = header.split_whitespace().collect();
+            for end in 1..=tokens.len() {
+                let source = tokens[..end].join(" ");
+                run_case(
+                    &format!("header truncated at token {end}"),
+                    &source,
+                    "",
+                    "",
+                    Some("Syntax Error"),
+                    &[],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_second_declaration_does_not_reuse_previous_parameters() {
+        for kind in ["PROCEDURE", "FUNCTION"] {
+            let source =
+                format!("PROCEDURE Valid(A, B : INTEGER)\nENDPROCEDURE\n{kind} Broken(C, D :\n");
+            run_case(kind, &source, "", "", Some("valid data type"), &[]);
+        }
+    }
+
+    #[test]
+    fn grouped_byref_input_errors_terminate_replay() {
+        let source = "PROCEDURE P(BYREF A, B : INTEGER)\nINPUT B\nOUTPUT \"unreachable\"\nENDPROCEDURE\nDECLARE X, Y : INTEGER\nCALL P(X, Y)\n";
+        let mut runner = StepInterpreter::new(source).unwrap();
+        assert!(matches!(runner.step(), StepEvent::NeedsInput { variable } if variable == "B"));
+        runner.supply_input("not an integer".to_owned());
+        assert!(matches!(runner.step(), StepEvent::Error { .. }));
+        assert!(matches!(runner.step(), StepEvent::Done));
+    }
+}
