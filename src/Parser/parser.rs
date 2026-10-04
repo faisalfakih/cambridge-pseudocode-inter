@@ -1343,7 +1343,7 @@ impl Parser {
             Ast::Stmt(s) => Ok(s),
             _ => Err(CPSError {
                 error_type: ErrorType::Syntax,
-                message: "Expected statement in procedure body".to_string(),
+                message: "Expected statement in function body".to_string(),
                 hint: Some("FUNCTION body must contain valid statements".to_string()),
                 line: function_token.line,
                 column: function_token.column,
@@ -1355,7 +1355,7 @@ impl Parser {
         if end_token.token_type != TokenType::EndFunction {
             return Err(CPSError {
                 error_type: ErrorType::Syntax,
-                message: "Expected 'ENDFUNCTION' after procedure body".to_string(),
+                message: "Expected 'ENDFUNCTION' after function body".to_string(),
                 hint: Some("FUNCTION must be closed with ENDFUNCTION".to_string()),
                 line: end_token.line,
                 column: end_token.column,
