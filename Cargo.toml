@@ -35,3 +35,4 @@ js-sys = "0.3"
 # clap uses OS APIs not available on wasm32-unknown-unknown
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 clap = { version = "4.5.56", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

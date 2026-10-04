@@ -1,10 +1,10 @@
 use crate::{
     errortype::{CPSError, ErrorType},
-    Inter::cps::{Type, Value},
+    Inter::cps::{Date, Type, Value},
 };
 use rand::random_range;
 
-pub const BUILTIN_IDENTIFIERS: [&str; 13] = [
+pub const BUILTIN_IDENTIFIERS: [&str; 22] = [
     "RIGHT",
     "LENGTH",
     "MID",
@@ -18,16 +18,27 @@ pub const BUILTIN_IDENTIFIERS: [&str; 13] = [
     "IS_NUM",
     "ASC",
     "CHR",
+    "LEFT",
+    // dates
+    "DAY",
+    "MONTH",
+    "YEAR",
+    "DAYINDEX",
+    "SETDATE",
+    "TODAY",
+    // alias for LCASE and UCASE
+    "TO_LOWER",
+    "TO_UPPER",
 ];
 
 pub fn call_builtin(name: String, args: &[Value]) -> Result<Option<Value>, CPSError> {
     match name.as_str() {
         name if name == BUILTIN_IDENTIFIERS[0] => builtin_right(args),
         name if name == BUILTIN_IDENTIFIERS[1] => builtin_length(args),
-        name if name == BUILTIN_IDENTIFIERS[2] => builtin_mid(args, "MID"),
-        name if name == BUILTIN_IDENTIFIERS[3] => builtin_mid(args, "SUBSTRING"), // Alias for MID
-        name if name == BUILTIN_IDENTIFIERS[4] => builtin_lcase(args),
-        name if name == BUILTIN_IDENTIFIERS[5] => builtin_ucase(args),
+        name if name == BUILTIN_IDENTIFIERS[2] => builtin_mid(args, BUILTIN_IDENTIFIERS[2]),
+        name if name == BUILTIN_IDENTIFIERS[3] => builtin_mid(args, BUILTIN_IDENTIFIERS[3]), // "SUBSTRING" alias for MID
+        name if name == BUILTIN_IDENTIFIERS[4] => builtin_lcase(args, BUILTIN_IDENTIFIERS[4]),
+        name if name == BUILTIN_IDENTIFIERS[5] => builtin_ucase(args, BUILTIN_IDENTIFIERS[5]),
         name if name == BUILTIN_IDENTIFIERS[6] => builtin_int(args),
         name if name == BUILTIN_IDENTIFIERS[7] => builtin_rand(args),
         name if name == BUILTIN_IDENTIFIERS[8] => builtin_num_to_str(args),
@@ -35,6 +46,15 @@ pub fn call_builtin(name: String, args: &[Value]) -> Result<Option<Value>, CPSEr
         name if name == BUILTIN_IDENTIFIERS[10] => builtin_is_num(args),
         name if name == BUILTIN_IDENTIFIERS[11] => builtin_asc(args),
         name if name == BUILTIN_IDENTIFIERS[12] => builtin_chr(args),
+        name if name == BUILTIN_IDENTIFIERS[13] => builtin_left(args),
+        name if name == BUILTIN_IDENTIFIERS[14] => builtin_day(args),
+        name if name == BUILTIN_IDENTIFIERS[15] => builtin_month(args),
+        name if name == BUILTIN_IDENTIFIERS[16] => builtin_year(args),
+        name if name == BUILTIN_IDENTIFIERS[17] => builtin_day_index(args),
+        name if name == BUILTIN_IDENTIFIERS[18] => builtin_set_date(args),
+        name if name == BUILTIN_IDENTIFIERS[19] => builtin_today(args),
+        name if name == BUILTIN_IDENTIFIERS[20] => builtin_lcase(args, BUILTIN_IDENTIFIERS[20]), // "TO_LOWER" alias for LCASE
+        name if name == BUILTIN_IDENTIFIERS[21] => builtin_ucase(args, BUILTIN_IDENTIFIERS[21]), // "TO_UPPER" alias for UCASE
         _ => Err(CPSError {
             error_type: ErrorType::Runtime,
             message: format!("Unknown builtin function: {}", name),
@@ -127,6 +147,20 @@ fn expect_real(value: &Value, func: &str, pos: usize) -> Result<f64, CPSError> {
     }
 }
 
+fn expect_date(value: &Value, func: &str, pos: usize) -> Result<Date, CPSError> {
+    match value {
+        Value::Date(d) => Ok(d.to_owned()),
+        _ => Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("{} argument {} must be a date", func, pos),
+            hint: None,
+            line: 0,
+            column: 0,
+            source: None,
+        }),
+    }
+}
+
 fn arg_count_error(func: &str, expected: usize, got: usize) -> CPSError {
     CPSError {
         error_type: ErrorType::Runtime,
@@ -169,6 +203,34 @@ fn builtin_right(args: &[Value]) -> Result<Option<Value>, CPSError> {
         chars.len() - length_usize
     };
     let result = chars[start..].iter().collect::<String>();
+
+    Ok(Some(Value::String(result)))
+}
+
+fn builtin_left(args: &[Value]) -> Result<Option<Value>, CPSError> {
+    if args.len() != 2 {
+        return Err(arg_count_error("LEFT", 2, args.len()));
+    }
+
+    let string = expect_string(&args[0], "LEFT", 1)?;
+    let length = expect_int(&args[1], "LEFT", 2)?;
+
+    if length < 0 {
+        return Err(CPSError {
+            error_type: ErrorType::Runtime,
+            message: "LEFT length must be non-negative".to_string(),
+            hint: None,
+            line: 0,
+            column: 0,
+            source: None,
+        });
+    }
+
+    let chars: Vec<char> = string.chars().collect();
+    let length_usize = length as usize;
+    let end = length_usize.min(chars.len());
+
+    let result = chars[0..end].iter().collect::<String>();
 
     Ok(Some(Value::String(result)))
 }
@@ -226,12 +288,12 @@ fn builtin_mid(args: &[Value], name: &str) -> Result<Option<Value>, CPSError> {
     Ok(Some(Value::String(result)))
 }
 
-fn builtin_lcase(args: &[Value]) -> Result<Option<Value>, CPSError> {
+fn builtin_lcase(args: &[Value], name: &str) -> Result<Option<Value>, CPSError> {
     if args.len() != 1 {
-        return Err(arg_count_error("LCASE", 1, args.len()));
+        return Err(arg_count_error(name, 1, args.len()));
     }
 
-    let (s, type_) = expect_string_or_char(&args[0], "LCASE", 1)?;
+    let (s, type_) = expect_string_or_char(&args[0], name, 1)?;
     let result = s.to_lowercase();
     match type_ {
         Type::Char => {
@@ -241,7 +303,10 @@ fn builtin_lcase(args: &[Value]) -> Result<Option<Value>, CPSError> {
                 _ => {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
-                        message: "LCASE result must contain exactly one character for a CHAR argument".to_string(),
+                        message: format!(
+                            "{} result must contain exactly one character for a CHAR argument",
+                            name
+                        ),
                         hint: None,
                         line: 0,
                         column: 0,
@@ -256,12 +321,12 @@ fn builtin_lcase(args: &[Value]) -> Result<Option<Value>, CPSError> {
     }
 }
 
-fn builtin_ucase(args: &[Value]) -> Result<Option<Value>, CPSError> {
+fn builtin_ucase(args: &[Value], name: &str) -> Result<Option<Value>, CPSError> {
     if args.len() != 1 {
-        return Err(arg_count_error("UCASE", 1, args.len()));
+        return Err(arg_count_error(name, 1, args.len()));
     }
 
-    let (s, type_) = expect_string_or_char(&args[0], "UCASE", 1)?;
+    let (s, type_) = expect_string_or_char(&args[0], name, 1)?;
     let result = s.to_uppercase();
     match type_ {
         Type::Char => {
@@ -271,7 +336,10 @@ fn builtin_ucase(args: &[Value]) -> Result<Option<Value>, CPSError> {
                 _ => {
                     return Err(CPSError {
                         error_type: ErrorType::Runtime,
-                        message: "UCASE result must contain exactly one character for a CHAR argument".to_string(),
+                        message: format!(
+                            "{} result must contain exactly one character for a CHAR argument",
+                            name
+                        ),
                         hint: None,
                         line: 0,
                         column: 0,
@@ -462,4 +530,117 @@ fn builtin_chr(args: &[Value]) -> Result<Option<Value>, CPSError> {
     }
 
     Ok(Some(Value::Char(number as u8 as char)))
+}
+
+fn builtin_day(args: &[Value]) -> Result<Option<Value>, CPSError> {
+    if args.len() != 1 {
+        return Err(arg_count_error("DAY", 1, args.len()));
+    }
+
+    let date = expect_date(&args[0], "DAY", 1)?;
+    Ok(Some(Value::Integer(date.day as i64)))
+}
+
+fn builtin_month(args: &[Value]) -> Result<Option<Value>, CPSError> {
+    if args.len() != 1 {
+        return Err(arg_count_error("MONTH", 1, args.len()));
+    }
+
+    let date = expect_date(&args[0], "MONTH", 1)?;
+    Ok(Some(Value::Integer(date.month as i64)))
+}
+
+fn builtin_year(args: &[Value]) -> Result<Option<Value>, CPSError> {
+    if args.len() != 1 {
+        return Err(arg_count_error("YEAR", 1, args.len()));
+    }
+
+    let date = expect_date(&args[0], "YEAR", 1)?;
+    Ok(Some(Value::Integer(date.year as i64)))
+}
+
+/// sakomotos algo to get an index for the day of the week where 1 = saturday, 2 = monday etc
+fn day_of_week(day: u16, month: u16, year: u16) -> i64 {
+    const OFFSETS: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+
+    let d = day as i64;
+    let m = month as i64;
+    let mut y = year as i64;
+
+    if m < 3 {
+        y -= 1;
+    }
+
+    let weekday = (y + y.div_euclid(4) - y.div_euclid(100)
+        + y.div_euclid(400)
+        + OFFSETS[(m - 1) as usize]
+        + d)
+        .rem_euclid(7);
+
+    weekday + 1
+}
+
+fn builtin_day_index(args: &[Value]) -> Result<Option<Value>, CPSError> {
+    if args.len() != 1 {
+        return Err(arg_count_error("DAYINDEX", 1, args.len()));
+    }
+
+    let date = expect_date(&args[0], "DAYINDEX", 1)?;
+    Ok(Some(Value::Integer(day_of_week(
+        date.day, date.month, date.year,
+    ))))
+}
+
+fn builtin_set_date(args: &[Value]) -> Result<Option<Value>, CPSError> {
+    if args.len() != 3 {
+        return Err(arg_count_error("SETDATE", 3, args.len()));
+    }
+
+    let day = expect_int(&args[0], "SETDATE", 1)?;
+    let month = expect_int(&args[1], "SETDATE", 2)?;
+    let year = expect_int(&args[2], "SETDATE", 3)?;
+
+    let date = Date::parse(&format!("{:02}/{:02}/{:04}", day, month, year)).map_err(|reason| {
+        CPSError {
+            error_type: ErrorType::Runtime,
+            message: format!("SETDATE: {}", reason),
+            hint: None,
+            line: 0,
+            column: 0,
+            source: None,
+        }
+    })?;
+
+    Ok(Some(Value::Date(date)))
+}
+
+fn builtin_today(args: &[Value]) -> Result<Option<Value>, CPSError> {
+    if !args.is_empty() {
+        return Err(arg_count_error("TODAY", 0, args.len()));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let today = chrono::Local::now().format("%d/%m/%Y").to_string();
+
+    #[cfg(target_arch = "wasm32")]
+    let today = {
+        let now = js_sys::Date::new_0();
+        format!(
+            "{:02}/{:02}/{:04}",
+            now.get_date(),
+            now.get_month() + 1,
+            now.get_full_year()
+        )
+    };
+
+    let date = Date::parse(&today).map_err(|reason| CPSError {
+        error_type: ErrorType::Runtime,
+        message: format!("TODAY: {}", reason),
+        hint: None,
+        line: 0,
+        column: 0,
+        source: None,
+    })?;
+
+    Ok(Some(Value::Date(date)))
 }

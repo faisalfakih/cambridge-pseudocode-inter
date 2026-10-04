@@ -1,6 +1,6 @@
 //! Run with `cargo test --test regression`; append a test-name filter to narrow the run.
 //! Covers the implemented 2026-guide subset and interpreter extensions.
-//! Records, pointers, sets, OOP, random-access files, WASM replay and CLI flags are excluded.
+//! Records, pointers, sets, OOP, random-access files and CLI flags are excluded.
 //! LCASE/UCASE preserve CHAR inputs (guide section 5.5) and STRING inputs (extension).
 
 use std::fs::{self, File};
@@ -3928,3 +3928,1290 @@ case!(
     Some("identifier after comma"),
     &[]
 );
+
+#[test]
+fn builtin_setdate_valid_calendar_dates() {
+    for (args, expected) in [
+        ("29, 2, 2024", "29/02/2024"),
+        ("29, 2, 2000", "29/02/2000"),
+        ("28, 2, 1900", "28/02/1900"),
+        ("30, 4, 2024", "30/04/2024"),
+        ("31, 12, 9999", "31/12/9999"),
+        ("1, 1, 1", "01/01/0001"),
+    ] {
+        run_case(
+            args,
+            &format!("DECLARE D : DATE\nD <- SETDATE({args})\nOUTPUT D\nOUTPUT D = {expected}\n"),
+            &format!("{expected}\nTRUE\n"),
+            "",
+            None,
+            &[],
+        );
+    }
+}
+
+#[test]
+fn builtin_setdate_rejects_invalid_calendar_dates() {
+    for args in [
+        "29, 2, 2025",
+        "29, 2, 1900",
+        "29, 2, 2100",
+        "31, 4, 2024",
+        "0, 1, 2024",
+        "32, 1, 2024",
+        "1, 0, 2024",
+        "1, 13, 2024",
+        "-1, 1, 2024",
+        "1, -1, 2024",
+        "1, 1, -1",
+        "1, 1, 10000",
+        "65537, 1, 2024",
+        "1, 65537, 2024",
+        "1, 1, 67560",
+    ] {
+        run_case(
+            args,
+            &format!("OUTPUT SETDATE({args})\n"),
+            "",
+            "",
+            Some("SETDATE"),
+            &[],
+        );
+    }
+}
+
+#[test]
+fn builtin_setdate_requires_three_arguments() {
+    for args in ["", "1", "1, 2", "1, 2, 2024, 4"] {
+        run_case(
+            args,
+            &format!("OUTPUT SETDATE({args})\n"),
+            "",
+            "",
+            Some("expects exactly 3 argument(s)"),
+            &[],
+        );
+    }
+}
+
+#[test]
+fn builtin_setdate_requires_integer_arguments() {
+    for args in [
+        "1.5, 1, 2024",
+        "1, 1.5, 2024",
+        "1, 1, 2024.5",
+        "TRUE, 1, 2024",
+        "1, \"1\", 2024",
+        "1, 1, 'x'",
+    ] {
+        run_case(
+            args,
+            &format!("OUTPUT SETDATE({args})\n"),
+            "",
+            "",
+            Some("must be an integer"),
+            &[],
+        );
+    }
+}
+
+#[test]
+fn builtin_today_returns_local_date() {
+    use cambridge_pseudocode_interpreter::Inter::{
+        builtins::call_builtin,
+        cps::{Date, Value},
+    };
+
+    let before = chrono::Local::now().format("%d/%m/%Y").to_string();
+    let result = call_builtin("TODAY".to_string(), &[]).unwrap();
+    let after = chrono::Local::now().format("%d/%m/%Y").to_string();
+    match result {
+        Some(Value::Date(date)) => {
+            assert!(date == Date::parse(&before).unwrap() || date == Date::parse(&after).unwrap())
+        }
+        other => panic!("TODAY must return DATE, got {other:?}"),
+    }
+}
+
+case!(
+    builtin_today_date_operations,
+    "TODAY can be assigned, compared and passed to date built-ins",
+    "DECLARE D : DATE\nD <- TODAY()\nOUTPUT D = SETDATE(DAY(D), MONTH(D), YEAR(D))\nOUTPUT DAY(D) >= 1 AND DAY(D) <= 31\nOUTPUT MONTH(D) >= 1 AND MONTH(D) <= 12\n",
+    "TRUE\nTRUE\nTRUE\n",
+    "",
+    None,
+    &[]
+);
+
+#[test]
+fn builtin_today_rejects_arguments() {
+    for args in ["1", "1, 2", "1, 2, 2024"] {
+        run_case(
+            args,
+            &format!("OUTPUT TODAY({args})\n"),
+            "",
+            "",
+            Some("expects exactly 0 argument(s)"),
+            &[],
+        );
+    }
+}
+
+#[test]
+fn builtin_today_native_timezones() {
+    for (zone, seconds) in [("Etc/GMT-14", 14 * 3600), ("Etc/GMT+12", -12 * 3600)] {
+        let directory = TestDirectory::new();
+        fs::write(directory.0.join("case.cps"), "OUTPUT TODAY()\n").unwrap();
+        let offset = chrono::FixedOffset::east_opt(seconds).unwrap();
+        let before = chrono::Utc::now()
+            .with_timezone(&offset)
+            .format("%d/%m/%Y\n")
+            .to_string();
+        let result = Command::new(env!("CARGO_BIN_EXE_cps"))
+            .arg("case.cps")
+            .current_dir(&directory.0)
+            .env("TZ", zone)
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        let after = chrono::Utc::now()
+            .with_timezone(&offset)
+            .format("%d/%m/%Y\n")
+            .to_string();
+        assert!(
+            result.status.success(),
+            "{zone}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let actual = String::from_utf8(result.stdout).unwrap();
+        assert!(
+            actual == before || actual == after,
+            "{zone}: expected {before:?} or {after:?}, got {actual:?}"
+        );
+    }
+}
+// New built-ins: direct value/type checks, CLI integration and the web replay engine.
+mod new_builtins {
+    use super::*;
+    use cambridge_pseudocode_interpreter::{
+        errortype::ErrorType,
+        Inter::{
+            builtins::call_builtin,
+            cps::{Date, Value},
+            interpreter::{Interpreter, ReplayContext},
+            step_interpreter::{StepEvent, StepInterpreter},
+        },
+        Lexer::lexer::Lexer,
+        Parser::parser::Parser,
+    };
+    use chrono::{Datelike, NaiveDate};
+    use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+    fn call(name: &str, args: &[Value]) -> Value {
+        call_builtin(name.to_owned(), args)
+            .unwrap_or_else(|error| panic!("{name}({args:?}): {error}"))
+            .unwrap_or_else(|| panic!("{name}({args:?}) did not return a value"))
+    }
+
+    fn reject(name: &str, args: &[Value], message: &str) {
+        let error = call_builtin(name.to_owned(), args)
+            .expect_err(&format!("{name}({args:?}) must be rejected"));
+        assert!(
+            matches!(error.error_type, ErrorType::Runtime),
+            "{name}: {error:?}"
+        );
+        assert!(
+            error.message.contains(name) && error.message.contains(message),
+            "{name}({args:?}): expected {message:?}, got {:?}",
+            error.message
+        );
+    }
+
+    fn date_value(date: NaiveDate) -> Value {
+        Value::Date(Date {
+            day: date.day() as u16,
+            month: date.month() as u16,
+            year: date.year() as u16,
+        })
+    }
+
+    #[test]
+    fn left_all_prefixes_and_clipping() {
+        for text in [
+            "",
+            "x",
+            "Cambridge",
+            " a b ",
+            "café🙂東京",
+            "e\u{301}",
+            "\0a\nb",
+        ] {
+            let chars: Vec<_> = text.chars().collect();
+            for length in 0..=chars.len() + 3 {
+                let expected = chars[..length.min(chars.len())].iter().collect::<String>();
+                assert_eq!(
+                    call(
+                        "LEFT",
+                        &[
+                            Value::String(text.to_owned()),
+                            Value::Integer(length as i64)
+                        ]
+                    ),
+                    Value::String(expected),
+                    "LEFT({text:?}, {length})"
+                );
+            }
+            assert_eq!(
+                call(
+                    "LEFT",
+                    &[Value::String(text.to_owned()), Value::Integer(i64::MAX)]
+                ),
+                Value::String(text.to_owned()),
+                "LEFT({text:?}, maximum INTEGER)"
+            );
+        }
+    }
+
+    #[test]
+    fn left_char_input_still_returns_string() {
+        for ch in ['A', 'é', '🙂', '\0'] {
+            for length in [0, 1, 2] {
+                assert_eq!(
+                    call("LEFT", &[Value::Char(ch), Value::Integer(length)]),
+                    Value::String(if length == 0 {
+                        String::new()
+                    } else {
+                        ch.to_string()
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn left_integral_real_length_extension() {
+        for length in [0.0, 1.0, 3.0, 10.0] {
+            assert_eq!(
+                call(
+                    "LEFT",
+                    &[Value::String("abc".to_owned()), Value::Real(length)]
+                ),
+                Value::String("abc".chars().take(length as usize).collect())
+            );
+        }
+    }
+
+    #[test]
+    fn left_rejects_nontext_first_argument() {
+        for value in [
+            Value::Integer(2),
+            Value::Real(1.5),
+            Value::Boolean(true),
+            date_value(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            Value::Array {
+                array: vec![Value::Char('a')],
+                lower_bound: 1,
+                bounds_2d: None,
+            },
+            Value::Enum {
+                type_name: "Season".to_owned(),
+                variant: Some("Spring".to_owned()),
+            },
+        ] {
+            reject(
+                "LEFT",
+                &[value, Value::Integer(1)],
+                "argument 1 must be a string",
+            );
+        }
+    }
+
+    #[test]
+    fn left_negative_length_diagnostic() {
+        for length in [-1, -100, i64::MIN] {
+            reject(
+                "LEFT",
+                &[Value::String("abc".to_owned()), Value::Integer(length)],
+                "non-negative",
+            );
+        }
+    }
+
+    #[test]
+    fn left_invalid_length_type_diagnostic() {
+        for length in [
+            Value::Real(1.5),
+            Value::Real(f64::NAN),
+            Value::Real(f64::INFINITY),
+            Value::Boolean(false),
+            Value::String("1".to_owned()),
+            Value::Char('1'),
+        ] {
+            reject(
+                "LEFT",
+                &[Value::String("abc".to_owned()), length],
+                "argument 2 must be an integer",
+            );
+        }
+    }
+
+    #[test]
+    fn left_composes_with_case_and_slicing() {
+        run_case(
+            "LEFT in expressions, parameters and returns",
+            "\
+FUNCTION Prefix(S : STRING, N : INTEGER) RETURNS STRING
+    RETURN LEFT(S, N)
+ENDFUNCTION
+DECLARE S : STRING
+DECLARE N : INTEGER
+S <- \"aBcDé\"
+N <- 3
+OUTPUT Prefix(S, N)
+OUTPUT UCASE(LEFT(S, N))
+OUTPUT LCASE(LEFT(S, N))
+OUTPUT LEFT(MID(S, 2, 3), 2)
+OUTPUT LENGTH(LEFT(S, 0))
+OUTPUT S
+",
+            "aBc\nABC\nabc\nBc\n0\naBcDé\n",
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn every_new_builtin_checks_arity_before_indexing_arguments() {
+        for (name, arity) in [
+            ("LEFT", 2),
+            ("DAY", 1),
+            ("MONTH", 1),
+            ("YEAR", 1),
+            ("DAYINDEX", 1),
+            ("SETDATE", 3),
+            ("TODAY", 0),
+        ] {
+            for count in 0..=5 {
+                if count == arity {
+                    continue;
+                }
+                reject(
+                    name,
+                    &vec![Value::Boolean(false); count],
+                    &format!("expects exactly {arity} argument(s), got {count}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn date_accessors_reject_every_nondate_type() {
+        for name in ["DAY", "MONTH", "YEAR", "DAYINDEX"] {
+            for value in [
+                Value::Integer(2024),
+                Value::Real(1.5),
+                Value::Char('1'),
+                Value::Boolean(true),
+                Value::String("29/02/2024".to_owned()),
+                Value::Array {
+                    array: vec![date_value(NaiveDate::from_ymd_opt(2024, 2, 29).unwrap())],
+                    lower_bound: 1,
+                    bounds_2d: None,
+                },
+                Value::Enum {
+                    type_name: "Season".to_owned(),
+                    variant: Some("Spring".to_owned()),
+                },
+            ] {
+                reject(name, &[value], "argument 1 must be a date");
+            }
+        }
+    }
+
+    #[test]
+    fn day_month_year_full_gregorian_cycle() {
+        let mut date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2400, 1, 1).unwrap();
+        while date < end {
+            let value = date_value(date);
+            for (name, expected) in [
+                ("DAY", date.day() as i64),
+                ("MONTH", date.month() as i64),
+                ("YEAR", date.year() as i64),
+            ] {
+                assert_eq!(
+                    call(name, std::slice::from_ref(&value)),
+                    Value::Integer(expected),
+                    "{name}({date})"
+                );
+            }
+            date = date.succ_opt().unwrap();
+        }
+    }
+
+    #[test]
+    fn dayindex_full_gregorian_cycle() {
+        let mut date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2400, 1, 1).unwrap();
+        while date < end {
+            assert_eq!(
+                call("DAYINDEX", &[date_value(date)]),
+                Value::Integer(date.weekday().number_from_sunday() as i64),
+                "DAYINDEX({date})"
+            );
+            date = date.succ_opt().unwrap();
+        }
+    }
+
+    #[test]
+    fn dayindex_sunday_one_through_saturday_seven() {
+        let mut source = String::new();
+        let mut expected = String::new();
+        for day in 1..=7 {
+            source.push_str(&format!("OUTPUT DAYINDEX(SETDATE({day}, 1, 2023))\n"));
+            expected.push_str(&format!("{day}\n"));
+        }
+        run_case(
+            "weekday numbering Sunday=1 through Saturday=7",
+            &source,
+            &expected,
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn date_accessors_year_boundaries() {
+        for year in [
+            1, 4, 100, 400, 1582, 1600, 1700, 1800, 1899, 1900, 1999, 9999,
+        ] {
+            for (month, day) in [(1, 1), (2, 28), (3, 1), (12, 31)] {
+                let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+                let value = date_value(date);
+                for (name, expected) in [
+                    ("DAY", day as i64),
+                    ("MONTH", month as i64),
+                    ("YEAR", year as i64),
+                    ("DAYINDEX", date.weekday().number_from_sunday() as i64),
+                ] {
+                    assert_eq!(
+                        call(name, std::slice::from_ref(&value)),
+                        Value::Integer(expected),
+                        "{name}({date})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dayindex_year_zero_january() {
+        let date = NaiveDate::from_ymd_opt(0, 1, 1).unwrap();
+        run_case(
+            "DAYINDEX accepts the year zero supported by SETDATE",
+            "OUTPUT DAYINDEX(SETDATE(1, 1, 0))\n",
+            &format!("{}\n", date.weekday().number_from_sunday()),
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn dayindex_year_zero_february() {
+        let date = NaiveDate::from_ymd_opt(0, 2, 29).unwrap();
+        run_case(
+            "DAYINDEX accepts the year zero leap day supported by SETDATE",
+            "OUTPUT DAYINDEX(SETDATE(29, 2, 0))\n",
+            &format!("{}\n", date.weekday().number_from_sunday()),
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn setdate_every_day_in_full_gregorian_cycle() {
+        let mut date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2400, 1, 1).unwrap();
+        while date < end {
+            assert_eq!(
+                call(
+                    "SETDATE",
+                    &[
+                        Value::Integer(date.day() as i64),
+                        Value::Integer(date.month() as i64),
+                        Value::Integer(date.year() as i64)
+                    ]
+                ),
+                date_value(date),
+                "SETDATE({date})"
+            );
+            date = date.succ_opt().unwrap();
+        }
+    }
+
+    #[test]
+    fn setdate_invalid_days_each_month_and_leap_century() {
+        for year in [
+            0, 1, 4, 100, 400, 1600, 1700, 1800, 1900, 2000, 2024, 2025, 2100, 2400, 9999,
+        ] {
+            for month in 1..=12 {
+                for day in 0..=32 {
+                    if NaiveDate::from_ymd_opt(year, month, day).is_some() {
+                        continue;
+                    }
+                    reject(
+                        "SETDATE",
+                        &[
+                            Value::Integer(day as i64),
+                            Value::Integer(month as i64),
+                            Value::Integer(year as i64),
+                        ],
+                        "valid day",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn setdate_invalid_months_and_years_do_not_wrap() {
+        for month in [-1, 0, 13, 65537, i64::MIN, i64::MAX] {
+            reject(
+                "SETDATE",
+                &[
+                    Value::Integer(1),
+                    Value::Integer(month),
+                    Value::Integer(2024),
+                ],
+                "SETDATE",
+            );
+        }
+        for year in [-1, 10000, 65536, 67560, i64::MIN, i64::MAX] {
+            reject(
+                "SETDATE",
+                &[Value::Integer(1), Value::Integer(1), Value::Integer(year)],
+                "SETDATE",
+            );
+        }
+        for day in [-1, 65537, i64::MIN, i64::MAX] {
+            reject(
+                "SETDATE",
+                &[Value::Integer(day), Value::Integer(1), Value::Integer(2024)],
+                "SETDATE",
+            );
+        }
+    }
+
+    #[test]
+    fn setdate_wrong_type_at_each_argument_position() {
+        let invalid = [
+            Value::Real(1.5),
+            Value::Real(f64::NAN),
+            Value::Real(f64::INFINITY),
+            Value::Real(f64::NEG_INFINITY),
+            Value::Boolean(true),
+            Value::String("1".to_owned()),
+            Value::Char('1'),
+            date_value(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            Value::Array {
+                array: vec![Value::Integer(1)],
+                lower_bound: 1,
+                bounds_2d: None,
+            },
+            Value::Enum {
+                type_name: "Season".to_owned(),
+                variant: Some("Spring".to_owned()),
+            },
+        ];
+        for position in 0..3 {
+            for value in &invalid {
+                let mut args = [Value::Integer(1), Value::Integer(1), Value::Integer(2024)];
+                args[position] = value.clone();
+                reject(
+                    "SETDATE",
+                    &args,
+                    &format!("argument {} must be an integer", position + 1),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn setdate_integral_real_argument_extension() {
+        for mask in 0..8 {
+            let mut args = [Value::Integer(29), Value::Integer(2), Value::Integer(2024)];
+            for (position, number) in [29.0, 2.0, 2024.0].into_iter().enumerate() {
+                if mask & (1 << position) != 0 {
+                    args[position] = Value::Real(number);
+                }
+            }
+            assert_eq!(
+                call("SETDATE", &args),
+                date_value(NaiveDate::from_ymd_opt(2024, 2, 29).unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn setdate_arguments_preserve_order_and_evaluate_once() {
+        run_case(
+            "SETDATE evaluates day, month and year once in order",
+            "\
+DECLARE Calls : INTEGER
+Calls <- 0
+FUNCTION Part(N : INTEGER) RETURNS INTEGER
+    Calls <- Calls + 1
+    OUTPUT Calls
+    RETURN N
+ENDFUNCTION
+OUTPUT SETDATE(Part(3), Part(4), Part(2024))
+OUTPUT Calls
+",
+            "1\n2\n3\n03/04/2024\n3\n",
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn date_builtins_work_with_arrays_parameters_and_returns() {
+        run_case(
+            "date built-ins compose with arrays and procedures",
+            "\
+DECLARE Dates : ARRAY[2:3] OF DATE
+FUNCTION Make(D : INTEGER, M : INTEGER, Y : INTEGER) RETURNS DATE
+    RETURN SETDATE(D, M, Y)
+ENDFUNCTION
+PROCEDURE Show(D : DATE)
+    DECLARE DayNumber : INTEGER
+    DECLARE MonthNumber : INTEGER
+    DECLARE YearNumber : INTEGER
+    DECLARE WeekdayNumber : INTEGER
+    DayNumber <- DAY(D)
+    MonthNumber <- MONTH(D)
+    YearNumber <- YEAR(D)
+    WeekdayNumber <- DAYINDEX(D)
+    OUTPUT DayNumber, \":\", MonthNumber, \":\", YearNumber, \":\", WeekdayNumber
+ENDPROCEDURE
+Dates[2] <- Make(29, 2, 2024)
+Dates[3] <- Make(1, 1, 2000)
+CALL Show(Dates[2])
+CALL Show(Dates[3])
+OUTPUT Dates[2] > Dates[3]
+",
+            "29:2:2024:5\n1:1:2000:7\nTRUE\n",
+            "",
+            None,
+            &[],
+        );
+    }
+
+    #[test]
+    fn new_builtins_are_functions_not_procedures() {
+        for (name, args) in [
+            ("LEFT", "\"abc\", 1"),
+            ("DAY", "01/01/2024"),
+            ("MONTH", "01/01/2024"),
+            ("YEAR", "01/01/2024"),
+            ("DAYINDEX", "01/01/2024"),
+            ("SETDATE", "1, 1, 2024"),
+            ("TODAY", ""),
+        ] {
+            run_case(
+                name,
+                &format!("CALL {name}({args})\n"),
+                "",
+                "",
+                Some("function"),
+                &[],
+            );
+        }
+    }
+
+    #[test]
+    fn new_builtin_errors_point_to_call_site() {
+        for (call, error) in [
+            ("LEFT(TRUE, 1)", "LEFT"),
+            ("DAY(1)", "DAY"),
+            ("MONTH(1)", "MONTH"),
+            ("YEAR(1)", "YEAR"),
+            ("DAYINDEX(1)", "DAYINDEX"),
+            ("SETDATE(31, 4, 2024)", "SETDATE"),
+            ("TODAY(1)", "TODAY"),
+        ] {
+            let source = format!("PROCEDURE P()\n    OUTPUT {call}\nENDPROCEDURE\nCALL P()\n");
+            run_case(
+                error,
+                &source,
+                "",
+                "",
+                Some("Runtime Error at line 2, column 5"),
+                &[],
+            );
+        }
+    }
+
+    fn replay(
+        source: &str,
+        inputs: &[&str],
+        output_skip: usize,
+        log: &mut Vec<Value>,
+    ) -> Result<(), ErrorType> {
+        let tokens = Lexer::new(source.to_owned()).tokenize().unwrap();
+        let ast = Parser::new(tokens, source.to_owned())
+            .parse_statements()
+            .unwrap();
+        let ctx = Rc::new(RefCell::new(ReplayContext {
+            inputs: inputs.iter().map(|s| s.to_string()).collect(),
+            input_pos: 0,
+            output_skip,
+            builtin_log: log.clone(),
+            builtin_pos: 0,
+            virtual_fs: Rc::new(RefCell::new(HashMap::new())),
+        }));
+        let result = Interpreter::new_replay(source.to_owned(), Rc::clone(&ctx)).interpret(ast);
+        *log = ctx.borrow().builtin_log.clone();
+        result.map_err(|error| error.error_type)
+    }
+
+    fn assert_output(result: Result<(), ErrorType>, expected: &str) {
+        match result {
+            Err(ErrorType::StepOutput(actual)) => assert_eq!(actual, expected),
+            other => panic!("expected output {expected:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn today_replay_keeps_historical_date_and_rand_after_input() {
+        let source = "\
+DECLARE D : DATE
+DECLARE R : REAL
+DECLARE Answer : STRING
+D <- TODAY()
+R <- RAND(10)
+OUTPUT D
+INPUT Answer
+OUTPUT R
+OUTPUT D
+OUTPUT TODAY()
+";
+        let original = vec![
+            date_value(NaiveDate::from_ymd_opt(2000, 12, 31).unwrap()),
+            Value::Real(0.25),
+        ];
+        let mut log = original.clone();
+        assert_output(replay(source, &[], 0, &mut log), "31/12/2000");
+        for _ in 0..2 {
+            assert!(
+                matches!(replay(source, &[], 1, &mut log), Err(ErrorType::StepNeedsInput(name)) if name == "Answer")
+            );
+            assert_eq!(log, original);
+        }
+        assert_output(replay(source, &["continue"], 1, &mut log), "0.25");
+        assert_output(replay(source, &["continue"], 2, &mut log), "31/12/2000");
+        let before = chrono::Local::now().date_naive();
+        let result = replay(source, &["continue"], 3, &mut log);
+        let after = chrono::Local::now().date_naive();
+        assert_eq!(log.len(), 3);
+        assert_eq!(&log[..2], original.as_slice());
+        assert!(log[2] == date_value(before) || log[2] == date_value(after));
+        assert_output(result, &log[2].to_string());
+        let saved = log.clone();
+        assert!(replay(source, &["continue"], 4, &mut log).is_ok());
+        assert_eq!(log, saved);
+    }
+
+    #[test]
+    fn today_and_rand_nested_arguments_keep_replay_order() {
+        let source = "OUTPUT RAND(DAY(TODAY()))\nOUTPUT TODAY()\n";
+        let mut log = vec![
+            date_value(NaiveDate::from_ymd_opt(2024, 2, 29).unwrap()),
+            Value::Real(2.5),
+            date_value(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        ];
+        let saved = log.clone();
+        assert_output(replay(source, &[], 0, &mut log), "2.5");
+        assert_output(replay(source, &[], 1, &mut log), "01/03/2024");
+        assert!(replay(source, &[], 2, &mut log).is_ok());
+        assert_eq!(log, saved);
+    }
+
+    #[test]
+    fn all_new_builtins_through_web_step_interpreter() {
+        let source = "\
+DECLARE D : DATE
+DECLARE Text : STRING
+DECLARE Now : DATE
+D <- SETDATE(29, 2, 2024)
+OUTPUT DAY(D)
+INPUT Text
+OUTPUT LEFT(Text, 3)
+OUTPUT MONTH(D)
+OUTPUT YEAR(D)
+OUTPUT DAYINDEX(D)
+Now <- TODAY()
+OUTPUT Now = SETDATE(DAY(Now), MONTH(Now), YEAR(Now))
+";
+        let mut runner = StepInterpreter::new(source).unwrap();
+        assert!(matches!(runner.step(), StepEvent::Output { value } if value == "29"));
+        assert!(matches!(runner.step(), StepEvent::NeedsInput { variable } if variable == "Text"));
+        runner.supply_input("abcde".to_owned());
+        for expected in ["abc", "2", "2024", "5", "TRUE"] {
+            match runner.step() {
+                StepEvent::Output { value } => assert_eq!(value, expected),
+                other => panic!("expected {expected:?}, got {other:?}"),
+            }
+        }
+        assert!(matches!(runner.step(), StepEvent::Done));
+        assert!(matches!(runner.step(), StepEvent::Done));
+    }
+
+    #[test]
+    fn invalid_new_builtin_calls_terminate_web_runner() {
+        for expression in [
+            "LEFT(TRUE, 1)",
+            "DAY(1)",
+            "MONTH(1)",
+            "YEAR(1)",
+            "DAYINDEX(1)",
+            "SETDATE(31, 4, 2024)",
+            "TODAY(1)",
+        ] {
+            let mut runner =
+                StepInterpreter::new(&format!("OUTPUT {expression}\nOUTPUT \"unreachable\"\n"))
+                    .unwrap();
+            assert!(
+                matches!(runner.step(), StepEvent::Error { .. }),
+                "{expression}"
+            );
+            assert!(matches!(runner.step(), StepEvent::Done), "{expression}");
+        }
+    }
+}
+mod case_aliases {
+    use super::*;
+    use cambridge_pseudocode_interpreter::{
+        errortype::ErrorType,
+        Inter::{
+            builtins::call_builtin,
+            cps::{Date, Value},
+            step_interpreter::{StepEvent, StepInterpreter},
+        },
+    };
+
+    fn convert(name: &str, value: Value) -> Value {
+        call_builtin(name.to_owned(), &[value.clone()])
+            .unwrap_or_else(|error| panic!("{name}({value:?}): {error}"))
+            .expect("case conversion must return a value")
+    }
+
+    fn reject(name: &str, args: &[Value], message: &str) {
+        let error =
+            call_builtin(name.to_owned(), args).expect_err(&format!("{name}({args:?}) must fail"));
+        assert!(matches!(error.error_type, ErrorType::Runtime), "{error:?}");
+        assert!(error.message.contains(name), "{error:?}");
+        assert!(error.message.contains(message), "{error:?}");
+    }
+
+    #[test]
+    fn every_ascii_char_preserves_type() {
+        for code in 0u8..=127 {
+            let ch = char::from(code);
+            let upper = if code.is_ascii_lowercase() {
+                code - 32
+            } else {
+                code
+            };
+            let lower = if code.is_ascii_uppercase() {
+                code + 32
+            } else {
+                code
+            };
+            assert_eq!(
+                convert("TO_UPPER", Value::Char(ch)),
+                Value::Char(char::from(upper)),
+                "U+{code:04X}"
+            );
+            assert_eq!(
+                convert("TO_LOWER", Value::Char(ch)),
+                Value::Char(char::from(lower)),
+                "U+{code:04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_ascii_single_character_string_preserves_type() {
+        for code in 0u8..=127 {
+            let ch = char::from(code);
+            let upper = if code.is_ascii_lowercase() {
+                code - 32
+            } else {
+                code
+            };
+            let lower = if code.is_ascii_uppercase() {
+                code + 32
+            } else {
+                code
+            };
+            assert_eq!(
+                convert("TO_UPPER", Value::String(ch.to_string())),
+                Value::String(char::from(upper).to_string()),
+                "U+{code:04X}"
+            );
+            assert_eq!(
+                convert("TO_LOWER", Value::String(ch.to_string())),
+                Value::String(char::from(lower).to_string()),
+                "U+{code:04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn strings_preserve_empty_whitespace_and_punctuation() {
+        for (input, upper, lower) in [
+            ("", "", ""),
+            ("Hello", "HELLO", "hello"),
+            ("aBc XYZ 019!?", "ABC XYZ 019!?", "abc xyz 019!?"),
+            (" \t\r\n", " \t\r\n", " \t\r\n"),
+            ("\0a\nZ\0", "\0A\nZ\0", "\0a\nz\0"),
+            ("'\"_+-=", "'\"_+-=", "'\"_+-="),
+        ] {
+            for (name, expected) in [("TO_UPPER", upper), ("TO_LOWER", lower)] {
+                assert_eq!(
+                    convert(name, Value::String(input.to_owned())),
+                    Value::String(expected.to_owned()),
+                    "{name}({input:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_chars_preserve_one_scalar_and_type() {
+        for (input, upper, lower) in [
+            ('é', 'É', 'é'),
+            ('É', 'É', 'é'),
+            ('ω', 'Ω', 'ω'),
+            ('Ж', 'Ж', 'ж'),
+            ('я', 'Я', 'я'),
+            ('ı', 'I', 'ı'),
+            ('🙂', '🙂', '🙂'),
+            ('中', '中', '中'),
+            ('\u{301}', '\u{301}', '\u{301}'),
+            ('𐐨', '𐐀', '𐐨'),
+        ] {
+            assert_eq!(
+                convert("TO_UPPER", Value::Char(input)),
+                Value::Char(upper),
+                "{input:?}"
+            );
+            assert_eq!(
+                convert("TO_LOWER", Value::Char(input)),
+                Value::Char(lower),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn upper_rejects_expanding_chars() {
+        for ch in ['ß', 'ﬃ', 'ﬀ', 'ΐ'] {
+            reject("TO_UPPER", &[Value::Char(ch)], "exactly one character");
+        }
+    }
+
+    #[test]
+    fn lower_rejects_expanding_chars() {
+        reject("TO_LOWER", &[Value::Char('İ')], "exactly one character");
+    }
+
+    #[test]
+    fn unicode_strings_keep_expansions_and_combining_marks() {
+        for (input, upper, lower) in [
+            ("café Ω Ж🙂中", "CAFÉ Ω Ж🙂中", "café ω ж🙂中"),
+            ("Straße ﬃ ﬀ", "STRASSE FFI FF", "straße ﬃ ﬀ"),
+            ("İ", "İ", "i\u{307}"),
+            ("e\u{301}", "E\u{301}", "e\u{301}"),
+            ("ΐ", "Ι\u{308}\u{301}", "ΐ"),
+            ("𐐨𐐀", "𐐀𐐀", "𐐨𐐨"),
+        ] {
+            for (name, expected) in [("TO_UPPER", upper), ("TO_LOWER", lower)] {
+                assert_eq!(
+                    convert(name, Value::String(input.to_owned())),
+                    Value::String(expected.to_owned()),
+                    "{name}({input:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lowercase_handles_contextual_greek_sigma() {
+        for (input, expected) in [
+            ("ΟΣ", "ος"),
+            ("ΟΣΑ", "οσα"),
+            ("Σ", "σ"),
+            ("ΟΣ ΟΣΑ", "ος οσα"),
+        ] {
+            assert_eq!(
+                convert("TO_LOWER", Value::String(input.to_owned())),
+                Value::String(expected.to_owned())
+            );
+        }
+        assert_eq!(convert("TO_LOWER", Value::Char('Σ')), Value::Char('σ'));
+    }
+
+    #[test]
+    fn long_strings_are_not_truncated() {
+        let input = Value::String("aßİ🙂\0\n".repeat(4096));
+        assert_eq!(
+            convert("TO_UPPER", input.clone()),
+            Value::String("ASSİ🙂\0\n".repeat(4096))
+        );
+        assert_eq!(
+            convert("TO_LOWER", input),
+            Value::String("aßi\u{307}🙂\0\n".repeat(4096))
+        );
+    }
+
+    #[test]
+    fn repeated_conversion_is_idempotent() {
+        for name in ["TO_UPPER", "TO_LOWER"] {
+            for input in ["", "AbC", "Straße İ ﬃ ΟΣ", "🙂\0\n", "e\u{301}"] {
+                let once = convert(name, Value::String(input.to_owned()));
+                assert_eq!(convert(name, once.clone()), once, "{name}({input:?})");
+            }
+        }
+    }
+
+    #[test]
+    fn aliases_match_originals_without_mutating_arguments() {
+        for (alias, original) in [("TO_UPPER", "UCASE"), ("TO_LOWER", "LCASE")] {
+            for value in [
+                Value::Char('é'),
+                Value::Char('🙂'),
+                Value::String(String::new()),
+                Value::String("AbC ß İ ΟΣ\0".to_owned()),
+            ] {
+                let args = vec![value];
+                let saved = args.clone();
+                assert_eq!(
+                    call_builtin(alias.to_owned(), &args).unwrap(),
+                    call_builtin(original.to_owned(), &args).unwrap()
+                );
+                assert_eq!(args, saved);
+            }
+        }
+    }
+
+    #[test]
+    fn wrong_argument_counts_report_alias_name() {
+        for name in ["TO_UPPER", "TO_LOWER"] {
+            for count in [0, 2, 3, 10] {
+                reject(
+                    name,
+                    &vec![Value::String("a".to_owned()); count],
+                    &format!("expects exactly 1 argument(s), got {count}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wrong_argument_types_report_alias_name() {
+        for name in ["TO_UPPER", "TO_LOWER"] {
+            for value in [
+                Value::Integer(65),
+                Value::Real(65.5),
+                Value::Boolean(true),
+                Value::Date(Date {
+                    day: 1,
+                    month: 1,
+                    year: 2024,
+                }),
+                Value::Array {
+                    array: vec![Value::Char('a')],
+                    lower_bound: 1,
+                    bounds_2d: None,
+                },
+                Value::Enum {
+                    type_name: "Letters".to_owned(),
+                    variant: Some("A".to_owned()),
+                },
+            ] {
+                reject(name, &[value], "argument 1");
+            }
+        }
+    }
+
+    case!(
+        typed_variables_and_arrays,
+        "case aliases preserve types in assignments",
+        r#"
+DECLARE C : CHAR
+DECLARE S : STRING
+DECLARE Chars : ARRAY[1:2] OF CHAR
+DECLARE Words : ARRAY[1:2] OF STRING
+C <- TO_UPPER('a')
+S <- TO_LOWER("Hello")
+Chars[1] <- TO_LOWER(C)
+Chars[2] <- TO_UPPER('é')
+Words[1] <- TO_UPPER(S)
+Words[2] <- TO_LOWER("")
+OUTPUT C, ":", S, ":", Chars[1], ":", Chars[2], ":", Words[1], ":", LENGTH(Words[2])
+OUTPUT TO_UPPER("a") = "A", TO_LOWER('A') = 'a'
+"#,
+        "A:hello:a:É:HELLO:0\nTRUETRUE\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        nested_calls_and_function_types,
+        "case aliases in nested calls and functions",
+        r#"
+FUNCTION Upper(C : CHAR) RETURNS CHAR
+RETURN TO_UPPER(C)
+ENDFUNCTION
+FUNCTION Lower(S : STRING) RETURNS STRING
+RETURN TO_LOWER(S)
+ENDFUNCTION
+OUTPUT Upper(TO_LOWER('Z'))
+OUTPUT Lower(TO_UPPER("Hello"))
+OUTPUT TO_LOWER(TO_UPPER("AbC")), ":", TO_UPPER(TO_LOWER('Q'))
+OUTPUT LENGTH(TO_UPPER("ßﬃ")), ":", ASC(TO_UPPER('a'))
+"#,
+        "Z\nhello\nabc:Q\n5:65\n",
+        "",
+        None,
+        &[]
+    );
+
+    case!(
+        input_and_original_values,
+        "case aliases leave input variables unchanged",
+        r#"
+DECLARE S : STRING
+DECLARE C : CHAR
+INPUT S
+INPUT C
+OUTPUT TO_UPPER(S), ":", TO_LOWER(S), ":", S
+OUTPUT TO_UPPER(C), ":", TO_LOWER(C), ":", C
+"#,
+        "HELLO:hello:Hello\nÉ:é:é\n",
+        "Hello\né\n",
+        None,
+        &[]
+    );
+
+    case!(
+        unicode_expansions_through_cli,
+        "case aliases retain string expansions",
+        "OUTPUT TO_UPPER(\"ßﬃ\")\nOUTPUT TO_LOWER(\"İ\")\n",
+        "SSFFI\ni\u{307}\n",
+        "",
+        None,
+        &[]
+    );
+
+    #[test]
+    fn invalid_calls_through_cli() {
+        for (expression, message) in [
+            (
+                "TO_UPPER()",
+                "TO_UPPER expects exactly 1 argument(s), got 0",
+            ),
+            (
+                "TO_LOWER()",
+                "TO_LOWER expects exactly 1 argument(s), got 0",
+            ),
+            (
+                "TO_UPPER(\"a\", \"b\")",
+                "TO_UPPER expects exactly 1 argument(s), got 2",
+            ),
+            (
+                "TO_LOWER('a', 'b')",
+                "TO_LOWER expects exactly 1 argument(s), got 2",
+            ),
+            ("TO_UPPER(TRUE)", "TO_UPPER argument 1"),
+            ("TO_LOWER(42)", "TO_LOWER argument 1"),
+            (
+                "TO_UPPER('ß')",
+                "TO_UPPER result must contain exactly one character",
+            ),
+            (
+                "TO_LOWER('İ')",
+                "TO_LOWER result must contain exactly one character",
+            ),
+        ] {
+            run_case(
+                expression,
+                &format!("OUTPUT {expression}\n"),
+                "",
+                "",
+                Some(message),
+                &[],
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_cannot_be_called_as_procedures() {
+        for name in ["TO_UPPER", "TO_LOWER"] {
+            run_case(
+                name,
+                &format!("CALL {name}(\"AbC\")\n"),
+                "",
+                "",
+                Some("as a procedure"),
+                &[],
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_through_web_step_interpreter() {
+        let source = "DECLARE S : STRING\nDECLARE C : CHAR\nINPUT S\nINPUT C\nOUTPUT TO_UPPER(S)\nOUTPUT TO_LOWER(S)\nOUTPUT TO_UPPER(C)\nOUTPUT TO_LOWER(C)\nOUTPUT S\nOUTPUT C\n";
+        let mut runner = StepInterpreter::new(source).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(runner.step(), StepEvent::NeedsInput { variable } if variable == "S"));
+        }
+        runner.supply_input("Straße İ".to_owned());
+        assert!(matches!(runner.step(), StepEvent::NeedsInput { variable } if variable == "C"));
+        runner.supply_input("é".to_owned());
+        for expected in ["STRASSE İ", "straße i\u{307}", "É", "é", "Straße İ", "é"] {
+            match runner.step() {
+                StepEvent::Output { value } => assert_eq!(value, expected),
+                other => panic!("expected {expected:?}, got {other:?}"),
+            }
+        }
+        assert!(matches!(runner.step(), StepEvent::Done));
+    }
+
+    #[test]
+    fn invalid_alias_calls_terminate_web_runner() {
+        for (name, argument) in [
+            ("TO_UPPER", "'ß'"),
+            ("TO_LOWER", "'İ'"),
+            ("TO_UPPER", "TRUE"),
+            ("TO_LOWER", ""),
+        ] {
+            let mut runner = StepInterpreter::new(&format!(
+                "OUTPUT {name}({argument})\nOUTPUT \"unreachable\"\n"
+            ))
+            .unwrap();
+            match runner.step() {
+                StepEvent::Error { message } => assert!(message.contains(name), "{message}"),
+                other => panic!("expected error for {name}({argument}), got {other:?}"),
+            }
+            assert!(matches!(runner.step(), StepEvent::Done));
+        }
+    }
+}
