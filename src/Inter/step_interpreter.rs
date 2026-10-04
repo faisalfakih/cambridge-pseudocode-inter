@@ -22,7 +22,7 @@
 //! This is O(n²) in total statements executed, which is entirely acceptable
 //! for educational Cambridge pseudocode programs.
 //!
-//! 5. `rand_log` holds every RAND value ever generated.  On replay `rand_pos`
+//! 5. `builtin_log` holds every RAND and TODAY value generated.  On replay `builtin_pos`
 //!    resets to 0 so the same sequence is produced.  New values are appended
 //!    at the end of the log and written back to `StepInterpreter` after each
 //!    replay, so they persist for subsequent calls to `step()`.
@@ -63,8 +63,8 @@ pub struct StepInterpreter {
     input_log: Vec<String>,
     /// How many OUTPUT events have already been served to the caller.
     output_pos: usize,
-    /// RAND values generated so far (persisted across replays for determinism).
-    rand_log: Vec<Value>,
+    /// RAND and TODAY values generated so far (persisted across replays for determinism).
+    builtin_log: Vec<Value>,
     /// Virtual filesystem state persisted across replays.
     virtual_fs: HashMap<String, VirtualFile>,
     /// Set to true once the program finishes or errors.
@@ -89,7 +89,7 @@ impl StepInterpreter {
             source: source.to_string(),
             input_log: Vec::new(),
             output_pos: 0,
-            rand_log: Vec::new(),
+            builtin_log: Vec::new(),
             virtual_fs: HashMap::new(),
             done: false,
         })
@@ -111,17 +111,17 @@ impl StepInterpreter {
             inputs: self.input_log.clone(),
             input_pos: 0,
             output_skip: self.output_pos,
-            rand_log: self.rand_log.clone(),
-            rand_pos: 0,
+            builtin_log: self.builtin_log.clone(),
+            builtin_pos: 0,
             virtual_fs: Rc::clone(&vfs_rc),
         }));
 
         let mut interp = Interpreter::new_replay(self.source.clone(), Rc::clone(&ctx));
         let result = interp.interpret_slice(&self.ast);
 
-        // Save any newly generated RAND values back so future replays are
+        // Save any newly generated RAND and TODAY values back so future replays are
         // deterministic.  This mirrors how input_log is updated via supply_input.
-        self.rand_log = ctx.borrow().rand_log.clone();
+        self.builtin_log = ctx.borrow().builtin_log.clone();
         // Sync virtual FS state back so file contents persist across replays.
         self.virtual_fs = vfs_rc.borrow().clone();
 

@@ -38,8 +38,8 @@ pub struct ReplayContext {
     pub inputs: Vec<String>,
     pub input_pos: usize,
     pub output_skip: usize,
-    pub rand_log: Vec<Value>,
-    pub rand_pos: usize,
+    pub builtin_log: Vec<Value>,
+    pub builtin_pos: usize,
     pub virtual_fs: Rc<RefCell<HashMap<String, VirtualFile>>>,
 }
 
@@ -2025,9 +2025,9 @@ impl Interpreter {
             }
         }
 
-        if identifier == "RAND" {
-            let rand_ctx = self.replay_ctx.as_ref().map(Rc::clone);
-            if let Some(ctx_rc) = rand_ctx {
+        if matches!(identifier, "RAND" | "TODAY") {
+            let builtin_ctx = self.replay_ctx.as_ref().map(Rc::clone);
+            if let Some(ctx_rc) = builtin_ctx {
                 // Always evaluate arguments first to preserve side effects.
                 let arg_values: Result<Vec<Value>, CPSError> = arguments
                     .iter()
@@ -2037,15 +2037,15 @@ impl Interpreter {
 
                 let maybe_logged = {
                     let ctx = ctx_rc.borrow();
-                    if ctx.rand_pos < ctx.rand_log.len() {
-                        Some(ctx.rand_log[ctx.rand_pos].clone())
+                    if ctx.builtin_pos < ctx.builtin_log.len() {
+                        Some(ctx.builtin_log[ctx.builtin_pos].clone())
                     } else {
                         None
                     }
                 };
 
                 if let Some(val) = maybe_logged {
-                    ctx_rc.borrow_mut().rand_pos += 1;
+                    ctx_rc.borrow_mut().builtin_pos += 1;
                     return Ok(val);
                 }
                 let value =
@@ -2055,8 +2055,8 @@ impl Interpreter {
                         None => Value::Boolean(false),
                     };
                 let mut ctx = ctx_rc.borrow_mut();
-                ctx.rand_log.push(value.clone());
-                ctx.rand_pos += 1;
+                ctx.builtin_log.push(value.clone());
+                ctx.builtin_pos += 1;
                 return Ok(value);
             }
         }
