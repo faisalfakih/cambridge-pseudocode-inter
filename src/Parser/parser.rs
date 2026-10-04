@@ -1255,108 +1255,7 @@ impl Parser {
             });
         }
 
-        let mut parameters: Vec<(String, Type, PassingValue)> = Vec::new();
-        let mut passing_value = PassingValue::ByVal;
-
-        let mut param_names: HashSet<String> = HashSet::new();
-
-        while self.peek(0).token_type != TokenType::RParen {
-            // go through the identifier : type pairs
-            let mut param_identifier = self.advance();
-            if param_identifier.token_type == TokenType::ByVal {
-                passing_value = PassingValue::ByVal;
-                param_identifier = self.advance();
-                if param_identifier.token_type != TokenType::Identifier {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected parameter name in procedure declaration".to_string(),
-                        hint: Some("Procedure parameters must have valid names".to_string()),
-                        line: param_identifier.line,
-                        column: param_identifier.column,
-                        source: Some(self.source.clone()),
-                    });
-                } 
-            }
-            else if param_identifier.token_type == TokenType::ByRef {
-                passing_value = PassingValue::ByRef;
-                param_identifier = self.advance();
-                if param_identifier.token_type != TokenType::Identifier {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected parameter name in procedure declaration".to_string(),
-                        hint: Some("Procedure parameters must have valid names".to_string()),
-                        line: param_identifier.line,
-                        column: param_identifier.column,
-                        source: Some(self.source.clone()),
-                    });
-                } 
-
-            }
-            else if param_identifier.token_type != TokenType::Identifier {
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Expected parameter name in procedure declaration".to_string(),
-                    hint: Some("Procedure parameters must have valid names".to_string()),
-                    line: param_identifier.line,
-                    column: param_identifier.column,
-                    source: Some(self.source.clone()),
-                });
-            } 
-
-            if !param_names.insert(param_identifier.lexeme.to_lowercase()) { // check if a parameter is repeated
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: format!("You cannot have 2 parameters with the same name: '{}' in a procedure.", param_identifier.lexeme),
-                    hint: Some("Note that the Cambridge Pseudocode is not case sensitive, so two of the same parameters with different cases are considered the same one.".to_lowercase()),
-                    line: param_identifier.line,
-                    column: param_identifier.column,
-                    source: Some(self.source.clone()),
-                })
-            }
-
-
-            // commented to align closer to spec (everything after a byval/byref is a byval/byref)
-            // else {  
-            //     // default type of variable is by value (make a copy of variable rather than reference)
-            //     passing_value = PassingValue::ByVal; // could be condensed by removing first if and shifting into 
-            //                                          // keeping it like this for simplicity/ease of reading
-            // }
-            let colon_token = self.advance();
-            if colon_token.token_type != TokenType::Colon {
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Expected ':' after parameter name".to_string(),
-                    hint: Some("Parameter name must be followed by its type".to_string()),
-                    line: colon_token.line,
-                    column: colon_token.column,
-                    source: Some(self.source.clone()),
-                });
-            }
-
-            let param_type = self.parse_type(TypeContext::Parameter)?;
-
-            parameters.push((param_identifier.lexeme.clone(), param_type, passing_value));
-
-            // check for comma after
-            if self.peek(0).token_type == TokenType::Comma {
-                self.advance(); // consume comma
-            } else {
-                break;
-            }
-
-        }
-
-        let close_paren = self.advance();
-        if close_paren.token_type != TokenType::RParen {
-            return Err(CPSError {
-                error_type: ErrorType::Syntax,
-                message: "Expected ')' after procedure parameters".to_string(),
-                hint: Some("PROCEDURE parameters must be enclosed in parentheses".to_string()),
-                line: close_paren.line,
-                column: close_paren.column,
-                source: Some(self.source.clone()),
-            });
-        }
+        let parameters: Vec<(String, Type, PassingValue)> = self.parse_parameters("procedure")?;
 
         self.scope += 1;
 
@@ -1421,105 +1320,7 @@ impl Parser {
             });
         }
 
-        let mut parameters: Vec<(String, Type, PassingValue)> = Vec::new();
-        let mut param_names: HashSet<String> = HashSet::new();
-
-        let passing_value = PassingValue::ByVal;
-        while self.peek(0).token_type != TokenType::RParen {
-            // go through the identifier : type pairs
-            let mut param_identifier = self.advance();
-            if param_identifier.token_type == TokenType::ByVal { 
-                // do nothing (ignore as its technically allowed)
-                param_identifier = self.advance();
-                if param_identifier.token_type != TokenType::Identifier {
-                    return Err(CPSError {
-                        error_type: ErrorType::Syntax,
-                        message: "Expected parameter name in function declaration".to_string(),
-                        hint: Some("Procedure parameters must have valid names".to_string()),
-                        line: param_identifier.line,
-                        column: param_identifier.column,
-                        source: Some(self.source.clone()),
-                    });
-                } 
-            }
-            else if param_identifier.token_type == TokenType::ByRef {
-                // ByRef is not allowed on functinos, so error
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Parameters should not be passed by reference to a function.".to_string(),
-                    hint: None,
-                    line: param_identifier.line,
-                    column: param_identifier.column,
-                    source: Some(self.source.clone()),
-                })
-
-            }
-            else if param_identifier.token_type != TokenType::Identifier {
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Expected parameter name in function declaration".to_string(),
-                    hint: Some("Procedure parameters must have valid names".to_string()),
-                    line: param_identifier.line,
-                    column: param_identifier.column,
-                    source: Some(self.source.clone()),
-                });
-            } 
-            // commented for the same reason as the procedures.
-            // else {
-            //     // default type of variable is by value (make a copy of variable rather than reference)
-            //     passing_value = PassingValue::ByVal; // could be condensed by removing first if and shifting into 
-            //                                          // keeping it like this for simplicity/ease of reading
-            // }
-
-            
-            if !param_names.insert(param_identifier.lexeme.to_lowercase()) { // check if a parameter is repeated
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: format!("You cannot have 2 parameters with the same name: '{}' in a function.", param_identifier.lexeme),
-                    hint: Some("Note that the Cambridge Pseudocode is not case sensitive, so two of the same parameters with different cases are considered the same one.".to_lowercase()),
-                    line: param_identifier.line,
-                    column: param_identifier.column,
-                    source: Some(self.source.clone()),
-                })
-            }
-
-
-
-
-
-            let colon_token = self.advance();
-            if colon_token.token_type != TokenType::Colon {
-                return Err(CPSError {
-                    error_type: ErrorType::Syntax,
-                    message: "Expected ':' after parameter name".to_string(),
-                    hint: Some("Parameter name must be followed by its type".to_string()),
-                    line: colon_token.line,
-                    column: colon_token.column,
-                    source: Some(self.source.clone()),
-                });
-            }
-
-            let param_type = self.parse_type(TypeContext::Parameter)?;
-            parameters.push((param_identifier.lexeme, param_type, passing_value));
-            // check for comma after
-            if self.peek(0).token_type == TokenType::Comma {
-                self.advance(); // consume comma
-            } else {
-                break;
-            }
-        }
-
-        let close_paren = self.advance();
-        if close_paren.token_type != TokenType::RParen {
-            return Err(CPSError {
-                error_type: ErrorType::Syntax,
-                message: "Expected ')' after function parameters".to_string(),
-                hint: Some("FUNCTION parameters must be enclosed in parentheses".to_string()),
-                line: close_paren.line,
-                column: close_paren.column,
-                source: Some(self.source.clone()),
-            });
-        }
+        let parameters: Vec<(String, Type, PassingValue)> = self.parse_parameters("function")?;
 
         let returns = self.advance();
         if returns.token_type != TokenType::Returns {
@@ -1543,19 +1344,19 @@ impl Parser {
             _ => Err(CPSError {
                 error_type: ErrorType::Syntax,
                 message: "Expected statement in procedure body".to_string(),
-                hint: Some("PROCEDURE body must contain valid statements".to_string()),
+                hint: Some("FUNCTION body must contain valid statements".to_string()),
                 line: function_token.line,
                 column: function_token.column,
                 source: Some(self.source.clone()),
             }),
         }).collect();
-        // consume endprocedure
+        // consume endfunction 
         let end_token = self.advance();
         if end_token.token_type != TokenType::EndFunction {
             return Err(CPSError {
                 error_type: ErrorType::Syntax,
                 message: "Expected 'ENDFUNCTION' after procedure body".to_string(),
-                hint: Some("PROCEDURE must be closed with ENDPROCEDURE".to_string()),
+                hint: Some("FUNCTION must be closed with ENDFUNCTION".to_string()),
                 line: end_token.line,
                 column: end_token.column,
                 source: Some(self.source.clone()),
@@ -1572,6 +1373,174 @@ impl Parser {
             },
             return_type,
         }) )
+    }
+
+    fn parse_parameters(&mut self, function_or_procedure: &str) -> Result<Vec<(String, Type, PassingValue)>, CPSError> {
+        let mut param_names: HashSet<String> = HashSet::new();
+        let mut parameters = Vec::new();
+        let mut parameter_group = Vec::new();
+
+        let mut passing_value = PassingValue::ByVal;
+
+        let mut was_last_comma = false;
+        let mut comma = None;
+        while self.peek(0).token_type != TokenType::RParen || !parameter_group.is_empty() {
+            was_last_comma = false;
+            // go through the identifier : type pairs
+            let mut param_identifier = self.advance();
+            if param_identifier.token_type == TokenType::ByVal { 
+                passing_value = PassingValue::ByVal;
+                param_identifier = self.advance();
+                if param_identifier.token_type != TokenType::Identifier {
+                    if function_or_procedure == "function" {
+                        return Err(CPSError {
+                            error_type: ErrorType::Syntax,
+                            message: format!("Expected parameter name in {} declaration", function_or_procedure),
+                            hint: Some(format!("Function parameters must have valid names")),
+                            line: param_identifier.line,
+                            column: param_identifier.column,
+                            source: Some(self.source.clone()),
+                        });
+                    } else {
+                        return Err(CPSError {
+                            error_type: ErrorType::Syntax,
+                            message: format!("Expected parameter name in {} declaration", function_or_procedure),
+                            hint: Some(format!("Procedure parameters must have valid names")),
+                            line: param_identifier.line,
+                            column: param_identifier.column,
+                            source: Some(self.source.clone()),
+                        });
+                    }
+                } 
+            }
+            else if param_identifier.token_type == TokenType::ByRef && function_or_procedure == "function" {
+                // ByRef is not allowed on functinos, so error
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("Parameters should not be passed by reference to a function."),
+                    hint: None,
+                    line: param_identifier.line,
+                    column: param_identifier.column,
+                    source: Some(self.source.clone()),
+                })
+
+            }
+            else if param_identifier.token_type == TokenType::ByRef && function_or_procedure == "procedure" {
+                passing_value = PassingValue::ByRef;
+                param_identifier = self.advance();
+                if param_identifier.token_type != TokenType::Identifier {
+                    return Err(CPSError {
+                        error_type: ErrorType::Syntax,
+                        message: format!("Expected parameter name in {} declaration", function_or_procedure),
+                        hint: Some(format!("Procedure parameters must have valid names")),
+                        line: param_identifier.line,
+                        column: param_identifier.column,
+                        source: Some(self.source.clone()),
+                    });
+                }
+
+            }
+            else if param_identifier.token_type != TokenType::Identifier {
+                if function_or_procedure == "function" {
+                    return Err(CPSError {
+                        error_type: ErrorType::Syntax,
+                        message: format!("Expected parameter name in {} declaration", function_or_procedure),
+                        hint: Some(format!("Function parameters must have valid names")),
+                        line: param_identifier.line,
+                        column: param_identifier.column,
+                        source: Some(self.source.clone()),
+                    });
+                }
+                else {
+                    return Err(CPSError {
+                        error_type: ErrorType::Syntax,
+                        message: format!("Expected parameter name in {} declaration", function_or_procedure),
+                        hint: Some(format!("Procedure parameters must have valid names")),
+                        line: param_identifier.line,
+                        column: param_identifier.column,
+                        source: Some(self.source.clone()),
+                    });
+                    
+                }
+            } 
+
+            if !param_names.insert(param_identifier.lexeme.to_lowercase()) { // check if a parameter is repeated
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("You cannot have 2 parameters with the same name: '{}' in a {}.", param_identifier.lexeme, function_or_procedure),
+                    hint: Some(format!("Note that the Cambridge Pseudocode is not case sensitive, so two of the same parameters with different cases are considered the same one.")),
+                    line: param_identifier.line,
+                    column: param_identifier.column,
+                    source: Some(self.source.clone()),
+                })
+            }
+
+            parameter_group.push((param_identifier.lexeme, passing_value));
+            if self.peek(0).token_type == TokenType::Comma {
+                was_last_comma = true;
+                comma = Some(self.advance());
+                continue;
+            }
+
+            let colon_token = self.advance();
+            if colon_token.token_type != TokenType::Colon {
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: "Expected ':' after parameter name".to_string(),
+                    hint: Some("Parameter name must be followed by its type".to_string()),
+                    line: colon_token.line,
+                    column: colon_token.column,
+                    source: Some(self.source.clone()),
+                });
+            }
+
+            let param_type = self.parse_type(TypeContext::Parameter)?;
+            for (name, passing_value) in parameter_group.drain(..) {
+                parameters.push((name, param_type.clone(), passing_value));
+            }
+            // check for comma after
+            if self.peek(0).token_type == TokenType::Comma {
+                was_last_comma = true;
+                comma = Some(self.advance());
+            } else {
+                break;
+            }
+        }
+
+        if was_last_comma {
+            return Err(CPSError { error_type: ErrorType::Syntax,
+                message: format!("Trailing comma after parameters in a {} declaration", function_or_procedure), 
+                hint: None, 
+                line: comma.clone().unwrap().line, 
+                column: comma.unwrap().column, 
+                source: Some(self.source.clone()) }
+            )
+        }
+
+        let close_paren = self.advance();
+        if close_paren.token_type != TokenType::RParen {
+            if function_or_procedure == "function" {
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("Expected ')' after {} parameters", function_or_procedure),
+                    hint: Some("FUNCTION parameters must be enclosed in parentheses".to_string()),
+                    line: close_paren.line,
+                    column: close_paren.column,
+                    source: Some(self.source.clone()),
+                });
+            } else{ 
+                return Err(CPSError {
+                    error_type: ErrorType::Syntax,
+                    message: format!("Expected ')' after {} parameters", function_or_procedure),
+                    hint: Some("PROCEDURE parameters must be enclosed in parentheses".to_string()),
+                    line: close_paren.line,
+                    column: close_paren.column,
+                    source: Some(self.source.clone()),
+                });
+            }
+        }
+
+        Ok(parameters)
     }
 
     fn parse_return(&mut self) -> Result<Ast, CPSError> {
